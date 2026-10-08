@@ -54,9 +54,46 @@ importers:
       '@co/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@co/worker':
+        specifier: workspace:*
+        version: link:../worker
       express:
         specifier: ^5.2.1
         version: 5.2.1
+
+  apps/core:
+    dependencies:
+      '@co/api':
+        specifier: workspace:*
+        version: link:../api
+      '@co/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@co/qbo':
+        specifier: workspace:*
+        version: link:../../packages/qbo
+      '@co/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@co/worker':
+        specifier: workspace:*
+        version: link:../worker
+
+  apps/worker:
+    dependencies:
+      '@co/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@co/qbo':
+        specifier: workspace:*
+        version: link:../../packages/qbo
+      '@co/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+    devDependencies:
+      '@co/api':
+        specifier: workspace:*
+        version: link:../api
 
   packages/crypto: {}
 

@@ -16,9 +16,13 @@ export class FakeQbo {
   readonly requests: Array<{ method: string; path: string; requestId: string | null }> = [];
   private readonly byRequestId = new Map<string, unknown>();
   private nextId = 1000;
-  private clock = Date.parse('2026-01-01T00:00:00Z');
+  private clock = Date.now() - 60_000;
   /** Statuses to return before handling normally, e.g. [429, 503]. */
   readonly injected: number[] = [];
+  /** Tombstones for CDC: entity -> (id -> deletion time). */
+  private readonly deleted = new Map<string, Map<string, string>>();
+  /** Max objects per entity in a CDC response (Intuit: 1000). */
+  cdcCap = 1000;
 
   constructor() {
     this.put('Account', { Id: '1', SyncToken: '0', Name: 'Services', AccountType: 'Income', Active: true, MetaData: this.meta() });
@@ -36,6 +40,14 @@ export class FakeQbo {
     if (injected) return json(injected, injected === 429 ? {} : { Fault: { Error: [{ Message: 'injected' }] } });
 
     if (method === 'GET' && path === '/query') return this.query(url.searchParams.get('query') ?? '');
+    if (method === 'GET' && path === '/cdc') return this.cdc(url.searchParams.get('entities') ?? '', url.searchParams.get('changedSince') ?? '');
+    const read = /^\/(\w+)\/([^/]+)$/.exec(path);
+    if (method === 'GET' && read) {
+      const entity = capitalize(read[1]!);
+      const obj = this.store.get(entity)?.get(decodeURIComponent(read[2]!));
+      if (!obj) return json(400, { Fault: { type: 'ValidationFault', Error: [{ code: '610', Message: 'Object Not Found' }] } });
+      return json(200, { [entity]: obj, time: new Date(this.clock).toISOString() });
+    }
     if (method === 'POST') {
       if (requestId && this.byRequestId.has(requestId)) return json(200, this.byRequestId.get(requestId));
       const entity = capitalize(path.slice(1));
@@ -46,12 +58,34 @@ export class FakeQbo {
     return json(404, { Fault: { Error: [{ code: '610', Message: 'Object Not Found' }] } });
   };
 
+  /** Simulate an edit made in the QuickBooks UI: bumps SyncToken and LastUpdatedTime. */
+  update(entity: string, id: string, patch: Obj): Obj {
+    const obj = this.store.get(entity)?.get(id);
+    if (!obj) throw new Error(`fake: no ${entity} ${id}`);
+    Object.assign(obj, patch, { SyncToken: String(Number(obj.SyncToken) + 1), MetaData: { ...obj.MetaData, LastUpdatedTime: this.meta().LastUpdatedTime } });
+    return obj;
+  }
+
+  remove(entity: string, id: string): void {
+    this.store.get(entity)?.delete(id);
+    if (!this.deleted.has(entity)) this.deleted.set(entity, new Map());
+    this.deleted.get(entity)!.set(id, this.meta().LastUpdatedTime);
+  }
+
+  /** Insert directly, bypassing API semantics (bulk fixtures). */
+  insert(entity: string, obj: Obj): Obj {
+    const full = { SyncToken: '0', ...obj, Id: obj.Id ?? String(this.nextId++), MetaData: this.meta() };
+    this.put(entity, full);
+    return full;
+  }
+
   all(entity: string): Obj[] {
     return [...(this.store.get(entity)?.values() ?? [])];
   }
 
   private meta() {
-    this.clock += 1000;
+    // Monotonic and never behind real time, like a real server clock.
+    this.clock = Math.max(this.clock + 1, Date.now());
     const t = new Date(this.clock).toISOString();
     return { CreateTime: t, LastUpdatedTime: t };
   }
@@ -88,17 +122,30 @@ export class FakeQbo {
   }
 
   private query(q: string): Response {
-    const m = /^select \* from (\w+)(?: where (\w+) = '((?:\\.|[^'])*)')?(?: orderby [\w.]+)?(?: startposition (\d+))?(?: maxresults (\d+))?$/i.exec(q.trim());
+    const m = /^select \* from (\w+)(?: where ([\w.]+) (=|>=) '((?:\\.|[^'])*)')?(?: orderby [\w.]+)?(?: startposition (\d+))?(?: maxresults (\d+))?$/i.exec(q.trim());
     if (!m) return json(400, { Fault: { Error: [{ code: '4000', Message: `fake cannot parse: ${q}` }] } });
-    const [, entity, field, rawValue, start, max] = m;
+    const [, entity, field, op, rawValue, start, max] = m;
     let rows = this.all(entity!).sort((a, b) => a.MetaData.LastUpdatedTime.localeCompare(b.MetaData.LastUpdatedTime));
     if (field) {
       const value = rawValue!.replace(/\\(.)/g, '$1');
-      rows = rows.filter((r) => String(r[field]) === value);
+      const get = (r: Obj) => field.split('.').reduce((o: any, k) => o?.[k], r);
+      rows = rows.filter((r) => (op === '=' ? String(get(r)) === value : String(get(r)) >= value));
     }
     const s = Number(start ?? 1) - 1;
     const page = rows.slice(s, s + Number(max ?? 100));
     return json(200, { QueryResponse: page.length ? { [entity!]: page, startPosition: s + 1, maxResults: page.length } : {} });
+  }
+  private cdc(entities: string, changedSince: string): Response {
+    if (!changedSince) return json(400, { Fault: { Error: [{ Message: 'changedSince required' }] } });
+    const since = new Date(changedSince).toISOString();
+    const qr = entities.split(',').map((entity) => {
+      const live = this.all(entity).filter((o) => o.MetaData.LastUpdatedTime >= since);
+      const gone = [...(this.deleted.get(entity) ?? [])]
+        .filter(([, t]) => t >= since)
+        .map(([Id, t]) => ({ Id, status: 'Deleted', MetaData: { LastUpdatedTime: t } }));
+      return { [entity]: [...live, ...gone].slice(0, this.cdcCap) };
+    });
+    return json(200, { CDCResponse: [{ QueryResponse: qr }], time: new Date(this.clock).toISOString() });
   }
 }
 

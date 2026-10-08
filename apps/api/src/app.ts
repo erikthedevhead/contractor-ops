@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import express, { type Request, type Response } from 'express';
 import { asSystem, withTenant, type Db } from '@co/db';
 import { buildAuthorizeUrl, exchangeCode, type FetchLike, type QboAppConfig, type TokenStore } from '@co/qbo';
+import { ingestDelivery } from './webhooks';
 import { isAppError, logger as baseLogger, type Logger } from '@co/shared';
 import { verifyConnectLink } from './connect-link';
 
@@ -10,6 +11,8 @@ export interface AppDeps {
   tokens: TokenStore;
   qbo: QboAppConfig;
   connectLinkSecret: string;
+  /** Intuit webhook verifier token. Without it the webhook endpoint answers 503. */
+  webhookVerifier?: string;
   /** Called after a successful connect (Day 1: kick off initial sync; Day 2: enqueue a job). */
   onConnected?: (tenantId: string, realmId: string) => void;
   fetchFn?: FetchLike;
@@ -25,6 +28,25 @@ export function createApp(deps: AppDeps) {
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true });
+  });
+
+  /**
+   * Intuit webhooks. Raw body parser: the signature is over the exact bytes,
+   * so the body must not be parsed and re-serialized before verification.
+   */
+  app.post('/webhooks/qbo', express.raw({ type: () => true, limit: '1mb' }), async (req: Request, res: Response) => {
+    if (!deps.webhookVerifier) {
+      log.error('webhook received but QBO_WEBHOOK_VERIFIER is not configured');
+      return void res.status(503).end();
+    }
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const result = await ingestDelivery(deps.db, {
+      rawBody: raw,
+      signature: req.get('intuit-signature'),
+      verifierToken: deps.webhookVerifier,
+      environment: deps.qbo.environment,
+    }, log);
+    res.status(result.status).end();
   });
 
   /** Step 1: signed link -> one-time OAuth state -> redirect to Intuit. */

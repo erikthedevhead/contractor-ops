@@ -15,6 +15,8 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
+export type JobStatus = "completed" | "dead" | "failed" | "queued" | "running";
+
 export type Json = JsonValue;
 
 export type JsonArray = JsonValue[];
@@ -86,6 +88,7 @@ export interface DeadLetters {
   payload: Json;
   queue: string;
   replayed_at: Timestamp | null;
+  source_job_id: Int8 | null;
   tenant_id: string | null;
 }
 
@@ -112,6 +115,23 @@ export interface EvalRuns {
   id: Generated<string>;
   started_at: Generated<Timestamp>;
   summary: Json | null;
+}
+
+export interface Jobs {
+  attempts: Generated<number>;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  id: Generated<Int8>;
+  last_error: Json | null;
+  locked_at: Timestamp | null;
+  locked_by: string | null;
+  max_attempts: Generated<number>;
+  payload: Generated<Json>;
+  queue: string;
+  run_at: Generated<Timestamp>;
+  singleton_key: string | null;
+  status: Generated<JobStatus>;
+  tenant_id: string | null;
 }
 
 export interface LlmCalls {
@@ -372,6 +392,7 @@ export interface DB {
   dead_letters: DeadLetters;
   eval_results: EvalResults;
   eval_runs: EvalRuns;
+  jobs: Jobs;
   llm_calls: LlmCalls;
   model_prices: ModelPrices;
   oauth_states: OauthStates;

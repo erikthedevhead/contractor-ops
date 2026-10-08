@@ -76,6 +76,21 @@ describe('seed -> sync', () => {
     expect(fake.all('Customer')).toHaveLength(expectedCounts.Customer);
   });
 
+  it('refuses to seed a QuickBooks company already seeded from another database', async () => {
+    const other = await makeTenant(db, 'seed-other');
+    try {
+      await tokens.saveConnection(other, `9341other${Date.now()}`, {
+        accessToken: 'a', refreshToken: 'r', accessExpiresAt: new Date(Date.now() + 3_600_000), refreshExpiresAt: null, responseKeys: [],
+      });
+      const otherClient = new QboClient(other, { tokens, meter: () => {}, fetchFn: fake.fetch, sleep: async () => {} });
+      const posts = fake.requests.filter((q) => q.method === 'POST').length;
+      await expect(runSeed({ db, client: otherClient, tenantId: other, anchor: ANCHOR, manifestPath: null, log: quiet })).rejects.toThrow(/already contains the seed catalog/);
+      expect(fake.requests.filter((q) => q.method === 'POST').length).toBe(posts);
+    } finally {
+      await dropTenant(db, other);
+    }
+  });
+
   it('refuses to re-seed with a different anchor', async () => {
     await expect(runSeed({ db, client, tenantId: tenant, anchor: '2027-01-01', manifestPath: null, log: quiet })).rejects.toThrow(/anchor/);
   });

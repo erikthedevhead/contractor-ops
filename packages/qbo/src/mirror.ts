@@ -297,3 +297,38 @@ async function replaceLines(tx: Tx, tenantId: string, txnType: 'Invoice' | 'Esti
     .execute();
 }
 
+
+const MIRROR_TABLE = {
+  Customer: 'qbo_customers',
+  Item: 'qbo_items',
+  Invoice: 'qbo_invoices',
+  Estimate: 'qbo_estimates',
+  Payment: 'qbo_payments',
+} as const;
+
+/**
+ * Marks a mirrored entity deleted (delete webhook, CDC tombstone, or a fetch
+ * that returns "object not found"). QuickBooks never reuses Ids, so a delete is
+ * final; dependent rows (lines, payment applications) are removed. Returns
+ * true if a row was changed.
+ */
+export async function markDeleted(tx: Tx, tenantId: string, entity: keyof typeof MIRROR_TABLE, qboId: string, mergedIntoId?: string): Promise<boolean> {
+  const table = MIRROR_TABLE[entity];
+  const res = await tx
+    .updateTable(table)
+    .set({ is_deleted: true, synced_at: new Date() })
+    .where('tenant_id', '=', tenantId)
+    .where('qbo_id', '=', qboId)
+    .where('is_deleted', '=', false)
+    .executeTakeFirst();
+  if (entity === 'Customer' && mergedIntoId) {
+    await tx.updateTable('qbo_customers').set({ merged_into_id: mergedIntoId }).where('tenant_id', '=', tenantId).where('qbo_id', '=', qboId).execute();
+  }
+  if (entity === 'Invoice' || entity === 'Estimate') {
+    await tx.deleteFrom('qbo_txn_lines').where('tenant_id', '=', tenantId).where('txn_type', '=', entity).where('txn_qbo_id', '=', qboId).execute();
+  }
+  if (entity === 'Payment') {
+    await tx.deleteFrom('qbo_payment_applications').where('tenant_id', '=', tenantId).where('payment_qbo_id', '=', qboId).execute();
+  }
+  return Number(res.numUpdatedRows) > 0;
+}

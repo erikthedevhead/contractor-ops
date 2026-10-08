@@ -1,0 +1,13 @@
+{
+  "name": "@co/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@co/api": "workspace:*",
+    "@co/db": "workspace:*",
+    "@co/qbo": "workspace:*",
+    "@co/shared": "workspace:*",
+    "@co/worker": "workspace:*"
+  }
+}

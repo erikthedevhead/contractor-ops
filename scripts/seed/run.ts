@@ -101,6 +101,22 @@ export async function runSeed(deps: SeedDeps): Promise<SeedResult> {
     }
   }
 
+  // Guard: seed keys and requestids are per tenant. If this sandbox company was
+  // already seeded from another database (e.g. local dev vs. the droplet), a
+  // second run would duplicate every estimate, invoice and payment.
+  const ledgerHasItems = await withTenant(db, tenantId, (tx) =>
+    tx.selectFrom('seed_ledger').select('seed_key').where('seed_key', 'like', 'item:%').limit(1).executeTakeFirst(),
+  );
+  if (!ledgerHasItems) {
+    const probe = await client.get<{ QueryResponse: { Item?: unknown[] } }>('/query', {
+      query: { query: `select * from Item where Name = ${qstr(ITEMS[0]!.name)}` },
+      entityName: 'Item',
+    });
+    if (probe.QueryResponse.Item?.length) {
+      throw new Error('This QuickBooks company already contains the seed catalog (seeded from another database). Refusing to seed again: it would duplicate every transaction. Use pnpm sync:initial instead.');
+    }
+  }
+
   const incomeAccount = await findIncomeAccount(client);
   log(`Using income account ${incomeAccount.name} (${incomeAccount.id})`);
 

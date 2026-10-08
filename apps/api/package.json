@@ -8,6 +8,10 @@
     "@co/db": "workspace:*",
     "@co/qbo": "workspace:*",
     "@co/shared": "workspace:*",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "@co/worker": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
   }
 }

@@ -1,0 +1,17 @@
+{
+  "name": "@co/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@co/db": "workspace:*",
+    "@co/qbo": "workspace:*",
+    "@co/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@co/api": "workspace:*"
+  }
+}

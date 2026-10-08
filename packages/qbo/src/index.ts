@@ -7,3 +7,6 @@ export * from './http';
 export * from './query';
 export * from './mirror';
 export * from './sync';
+export * from './webhooks';
+export * from './process-event';
+export * from './cdc';

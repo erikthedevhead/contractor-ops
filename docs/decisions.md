@@ -2,6 +2,16 @@
 
 Short records of choices that a reviewer might question. Newest first.
 
+## D5. Job queue: a Postgres table, not pg-boss
+**Day 2.** pg-boss creates queue partitions at runtime, which needs DDL rights
+and would force the app onto the schema-owner role, undoing the point of RLS
+with a non-owner role. The queue here is one table plus ~150 lines:
+`FOR UPDATE SKIP LOCKED` claims inside a `MATERIALIZED` CTE, singleton keys for
+dedupe, jittered backoff, dead-lettering, replay and stale-lock reaping. Every
+state is visible with a SELECT, which matters when debugging an integration.
+The webhook endpoint enqueues in the same transaction that records the event,
+so there is never an event without a job or a job without an event.
+
 ## D4. Data layer: plain SQL migrations + Kysely (not Prisma)
 **Day 1.** Every interesting database behavior in this project is raw SQL:
 row-level security policies, guarded upserts (`ON CONFLICT ... DO UPDATE ... WHERE

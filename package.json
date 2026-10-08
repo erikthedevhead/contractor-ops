@@ -12,13 +12,16 @@
     "test:unit": "vitest run --project unit",
     "test:db": "vitest run --project db",
     "db:migrate": "tsx --env-file=.env packages/db/src/migrate.ts",
-    "dev:api": "tsx watch --env-file=.env apps/api/src/server.ts",
     "tenant:create": "tsx --env-file=.env scripts/create-tenant.ts",
     "seed:sandbox": "tsx --env-file=.env scripts/seed-sandbox.ts",
     "sync:initial": "tsx --env-file=.env scripts/initial-sync.ts",
     "keygen": "tsx scripts/keygen.ts",
     "db:types": "tsx --env-file=.env scripts/gen-db-types.ts",
-    "tenant:link": "tsx --env-file=.env scripts/create-tenant.ts --link"
+    "tenant:link": "tsx --env-file=.env scripts/create-tenant.ts --link",
+    "dev": "tsx watch --env-file=.env apps/core/src/main.ts",
+    "start": "node --env-file=.env --import tsx apps/core/src/main.ts",
+    "reconcile": "tsx --env-file=.env scripts/reconcile.ts",
+    "dlq": "tsx --env-file=.env scripts/dlq.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
