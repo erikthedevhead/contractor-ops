@@ -22,7 +22,9 @@ const EnvSchema = z.object({
       }
       return ring;
     } catch (err) {
-      ctx.addIssue({ code: 'custom', message: `TOKEN_ENC_KEYS: ${(err as Error).message}` });
+      // Never echo the value: parse errors quote the input, and this input is a key.
+      const msg = err instanceof SyntaxError ? 'must be JSON like {"1":"<base64 32-byte key>"}' : (err as Error).message;
+      ctx.addIssue({ code: 'custom', message: msg });
       return z.NEVER;
     }
   }),

@@ -21,7 +21,8 @@
     "dev": "tsx watch --env-file=.env apps/core/src/main.ts",
     "start": "node --env-file=.env --import tsx apps/core/src/main.ts",
     "reconcile": "tsx --env-file=.env scripts/reconcile.ts",
-    "dlq": "tsx --env-file=.env scripts/dlq.ts"
+    "dlq": "tsx --env-file=.env scripts/dlq.ts",
+    "webhooks:reingest": "tsx --env-file=.env scripts/reingest.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",

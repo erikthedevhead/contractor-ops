@@ -48,6 +48,11 @@ architecture diagram and eval results land at the end of the week.
   non-retryable errors, replay from the CLI, and recovery of jobs abandoned by
   a crashed worker. The tests caught a real Postgres gotcha along the way
   (an un-materialized `IN (SELECT ... LIMIT n)` can lock more than n rows).
+- **Built against the real thing, not the docs.** The live sandbox sent Intuit's
+  legacy payload format despite the documented retirement, and payments don't
+  notify about the invoices they change. Both are handled; see D6 in
+  `docs/decisions.md`. The first rejected delivery was recovered by replaying it
+  from the stored raw body.
 - **A nightly safety net.** CDC reconcile catches missed creates, updates and
   deletes; falls back to a paged query when an entity hits CDC's 1,000-object
   cap; schedules a full re-sync when the gap exceeds CDC's 30-day window.
@@ -59,6 +64,7 @@ pnpm dev                      # API + worker locally
 pnpm reconcile <tenant-id>    # run CDC reconcile now
 pnpm dlq list                 # dead-lettered jobs
 pnpm dlq replay <id>          # requeue one
+pnpm webhooks:reingest <id>   # replay a stored delivery through the current parser
 bash infra/deploy.sh          # deploy to the droplet
 ```
 

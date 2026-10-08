@@ -8,7 +8,8 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asSystem, withTenant } from '@co/db';
-import { createApp } from '@co/api';
+import { createApp } from '../../api/src/app';
+import { ingestStoredDelivery } from '../../api/src/webhooks';
 import { initialSync, QboClient, reconcile, TokenStore } from '@co/qbo';
 import { dropTenant, makeTenant, testDb } from '../../../packages/db/test/helpers';
 import { FakeQbo } from '../../../packages/qbo/test/fake-qbo';
@@ -60,7 +61,7 @@ const event = (entity: string, op: string, id: string, extra: Record<string, unk
   time: new Date().toISOString(), intuitentityid: id, intuitaccountid: realm, ...extra,
 });
 
-async function deliver(events: unknown[], opts: { badSignature?: boolean } = {}) {
+async function deliver(events: unknown, opts: { badSignature?: boolean } = {}) {
   const body = JSON.stringify(events);
   const sig = createHmac('sha256', opts.badSignature ? 'wrong' : verifier).update(body).digest('base64');
   return fetch(`${base}/webhooks/qbo`, { method: 'POST', headers: { 'content-type': 'application/cloudevents-batch+json', 'intuit-signature': sig }, body });
@@ -148,6 +149,64 @@ describe('webhook -> queue -> worker -> mirror', () => {
   it('records the newest processed event time per entity (CDC starting point)', async () => {
     const c = await withTenant(db, tenant, (tx) => tx.selectFrom('sync_cursors').selectAll().where('entity_name', '=', 'Invoice').executeTakeFirstOrThrow());
     expect(c.last_event_time).not.toBeNull();
+  });
+});
+
+describe('legacy webhook format', () => {
+  const legacy = (name: string, op: string, id: string, lastUpdated: string) => ({
+    eventNotifications: [{ realmId: realm, dataChangeEvent: { entities: [{ name, id, operation: op, lastUpdated }] } }],
+  });
+
+  it('a payment refreshes the invoices it applies to (Intuit only notifies about the Payment)', async () => {
+    // Fresh invoice so earlier tests' balance edits don't interfere.
+    const inv = fake.insert('Invoice', {
+      CustomerRef: { value: customerId }, TxnDate: '2026-09-15', DueDate: '2026-10-15', TotalAmt: 7682, Balance: 7682,
+      Line: [{ Id: '1', Amount: 7682, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { ItemRef: { value: '1' }, Qty: 1, UnitPrice: 7682 } }],
+    });
+    await deliver(legacy('Invoice', 'Create', inv.Id, new Date().toISOString()));
+    await worker.drain();
+
+    // Receive $500 in QuickBooks: the fake applies it to the invoice's Balance, like QBO does.
+    const res = await fake.fetch(`https://sandbox-quickbooks.api.intuit.com/v3/company/${realm}/payment?requestid=pay-1`, {
+      method: 'POST', body: JSON.stringify({ CustomerRef: { value: customerId }, TotalAmt: 500, TxnDate: '2026-10-08', Line: [{ Amount: 500, LinkedTxn: [{ TxnId: inv.Id, TxnType: 'Invoice' }] }] }),
+    });
+    const payment = ((await res.json()) as { Payment: { Id: string; MetaData: { LastUpdatedTime: string } } }).Payment;
+
+    const r = await deliver(legacy('Payment', 'Create', payment.Id, payment.MetaData.LastUpdatedTime));
+    expect(r.status).toBe(200);
+    expect(await worker.drain()).toBe(1);
+    const row = await withTenant(db, tenant, (tx) => tx.selectFrom('qbo_invoices').select('balance').where('qbo_id', '=', inv.Id).executeTakeFirstOrThrow());
+    expect(row.balance).toBe('7182.00');
+  });
+
+  it('dedupes a legacy redelivery by its derived id', async () => {
+    const body = legacy('Customer', 'Update', customerId, '2026-10-08T22:00:00.000Z');
+    await deliver(body);
+    await deliver(body);
+    const events = await withTenant(db, tenant, (tx) =>
+      tx.selectFrom('webhook_events').select('id').where('event_id', '=', `legacy:${realm}:customer:${customerId}:updated:2026-10-08T22:00:00.000Z`).execute(),
+    );
+    expect(events).toHaveLength(1);
+    await worker.drain();
+  });
+
+  it('replays a stored delivery that an older parser rejected', async () => {
+    // Store a verified delivery directly, as if the parser had failed on it.
+    const c = fake.insert('Customer', { DisplayName: 'Replay Test Co' });
+    const raw = JSON.stringify(legacy('Customer', 'Create', c.Id, new Date().toISOString()));
+    const d = await db.insertInto('webhook_deliveries').values({ signature: 'x', signature_valid: true, raw_body: raw }).returning('id').executeTakeFirstOrThrow();
+
+    const first = await ingestStoredDelivery(db, d.id, 'sandbox', silent);
+    const second = await ingestStoredDelivery(db, d.id, 'sandbox', silent);
+    expect([first.accepted, second.duplicates]).toEqual([1, 1]);
+    await worker.drain();
+    const row = await withTenant(db, tenant, (tx) => tx.selectFrom('qbo_customers').select('display_name').where('qbo_id', '=', c.Id).executeTakeFirstOrThrow());
+    expect(row.display_name).toBe('Replay Test Co');
+  });
+
+  it('never replays a delivery whose signature failed', async () => {
+    const d = await db.insertInto('webhook_deliveries').values({ signature: 'bad', signature_valid: false, raw_body: '{}' }).returning('id').executeTakeFirstOrThrow();
+    expect((await ingestStoredDelivery(db, d.id, 'sandbox', silent)).accepted).toBe(0);
   });
 });
 

@@ -90,10 +90,6 @@ importers:
       '@co/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-    devDependencies:
-      '@co/api':
-        specifier: workspace:*
-        version: link:../api
 
   packages/crypto: {}
 

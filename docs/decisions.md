@@ -2,6 +2,20 @@
 
 Short records of choices that a reviewer might question. Newest first.
 
+## D6. Accept both Intuit webhook formats
+**Day 2, found in the live sandbox.** Intuit's docs say the legacy webhook
+format was retired in July 2026, but a new app's "CloudEvents payload" setting
+still defaults to disabled, and the sandbox sent the legacy shape. The endpoint
+detects and parses either. Legacy events have no id, so one is derived from
+(realm, entity, id, operation, lastUpdated); redeliveries dedupe the same way
+CloudEvents retries do. The first live delivery was rejected by the original
+CloudEvents-only parser; because raw deliveries are persisted before parsing,
+it was recovered afterwards with `pnpm webhooks:reingest`.
+
+Also found live: receiving a payment notifies only about the Payment, never
+the Invoice whose balance it changed. The processor now refreshes every
+invoice a payment applies to (before and after the change).
+
 ## D5. Job queue: a Postgres table, not pg-boss
 **Day 2.** pg-boss creates queue partitions at runtime, which needs DDL rights
 and would force the app onto the schema-owner role, undoing the point of RLS

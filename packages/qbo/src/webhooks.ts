@@ -34,6 +34,7 @@ const CloudEvent = z
   .loose();
 
 export interface ParsedEvent {
+  format: 'cloudevents' | 'legacy';
   eventId: string;
   eventType: string;
   entityName: string;   // lower-case as sent: invoice, customer, ...
@@ -71,6 +72,7 @@ export function parseCloudEvents(body: unknown): ParseResult {
       return;
     }
     events.push({
+      format: 'cloudevents',
       eventId: r.data.id,
       eventType: r.data.type,
       entityName: entity!.toLowerCase(),
@@ -90,4 +92,74 @@ const MIRRORED: Record<string, MirrorEntity> = {
 
 export function mirrorEntityFor(entityName: string): MirrorEntity | null {
   return MIRRORED[entityName.toLowerCase()] ?? null;
+}
+
+/**
+ * Intuit's legacy webhook format, still sent when an app's "CloudEvents
+ * payload" setting is disabled:
+ *   {"eventNotifications":[{"realmId":"...","dataChangeEvent":{"entities":[
+ *     {"name":"Payment","id":"247","operation":"Create","lastUpdated":"..."}]}}]}
+ * It has no event id, so we derive a deterministic one from
+ * (realm, entity, id, operation, lastUpdated): a redelivery of the same change
+ * produces the same id and is deduped exactly like a CloudEvents retry.
+ */
+const LegacyEntity = z
+  .object({
+    name: z.string().min(1),
+    id: z.coerce.string().min(1),
+    operation: z.string().min(1),
+    lastUpdated: z.string().min(1),
+    deletedId: z.coerce.string().optional(),
+  })
+  .loose();
+
+const LEGACY_OPS: Record<string, string> = {
+  create: 'created', update: 'updated', delete: 'deleted', merge: 'merged', void: 'voided', emailed: 'emailed',
+};
+
+export function parseLegacyNotifications(body: unknown): ParseResult {
+  const events: ParsedEvent[] = [];
+  const rejected: ParseResult['rejected'] = [];
+  const notifications = (body as { eventNotifications?: unknown })?.eventNotifications;
+  if (!Array.isArray(notifications)) return { events, rejected: [{ index: 0, reason: 'eventNotifications: expected array' }] };
+  let index = 0;
+  for (const n of notifications) {
+    const realmId = (n as { realmId?: unknown })?.realmId;
+    const entities = (n as { dataChangeEvent?: { entities?: unknown } })?.dataChangeEvent?.entities;
+    if (typeof realmId !== 'string' && typeof realmId !== 'number') {
+      rejected.push({ index: index++, reason: 'realmId missing' });
+      continue;
+    }
+    for (const raw of Array.isArray(entities) ? entities : []) {
+      const r = LegacyEntity.safeParse(raw);
+      const time = r.success ? new Date(r.data.lastUpdated) : null;
+      if (!r.success || !time || Number.isNaN(time.getTime())) {
+        rejected.push({ index: index++, reason: r.success ? 'lastUpdated: not a timestamp' : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
+        continue;
+      }
+      const entity = r.data.name.toLowerCase();
+      const op = LEGACY_OPS[r.data.operation.toLowerCase()] ?? r.data.operation.toLowerCase();
+      events.push({
+        format: 'legacy',
+        eventId: `legacy:${realmId}:${entity}:${r.data.id}:${op}:${time.toISOString()}`,
+        eventType: `qbo.${entity}.${op}.legacy`,
+        entityName: entity,
+        operation: op,
+        entityId: r.data.id,
+        realmId: String(realmId),
+        eventTime: time,
+        data: r.data.deletedId ? { deletedId: r.data.deletedId } : null,
+      });
+      index++;
+    }
+  }
+  return { events, rejected };
+}
+
+/** Accepts either format; Intuit decides which one per app setting. */
+export function parseWebhookBody(body: unknown): ParseResult {
+  if (body && typeof body === 'object' && !Array.isArray(body) && 'eventNotifications' in body) {
+    return parseLegacyNotifications(body);
+  }
+  return parseCloudEvents(body);
 }

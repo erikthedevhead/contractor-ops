@@ -23,5 +23,9 @@ ssh "$HOST" "cd $DIR && test -f .env || { echo 'missing .env on server'; exit 1;
   pm2 save"
 
 echo "==> health"
-sleep 2
-curl -fsS "https://contractor-ops.houghworks.com/health" && echo
+for i in $(seq 1 20); do
+  if curl -fsS "https://contractor-ops.houghworks.com/health" 2>/dev/null; then echo; exit 0; fi
+  sleep 1
+done
+echo "health check failed after 20s; run: ssh $HOST 'pm2 logs co-core --lines 40 --nostream'" >&2
+exit 1

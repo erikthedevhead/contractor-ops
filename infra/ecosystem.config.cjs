@@ -11,6 +11,11 @@ module.exports = {
       interpreter_args: '--env-file=.env --import tsx',
       max_memory_restart: '350M',
       kill_timeout: 15000, // lets the worker finish its in-flight job on reload
+      // A config error must not spin the CPU on a shared box: crashing within
+      // 10s counts as unstable; 10 unstable restarts and PM2 gives up.
+      min_uptime: '10s',
+      max_restarts: 10,
+      restart_delay: 2000,
       time: true,
     },
   ],

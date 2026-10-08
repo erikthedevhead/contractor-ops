@@ -28,6 +28,10 @@ export async function processWebhookEvent(db: Db, client: QboClient, eventRowId:
 
   const entity = mirrorEntityFor(ev.entity_name);
   try {
+    // A payment changes the Balance of the invoices it applies to, but Intuit
+    // only notifies about the Payment. Remember which invoices it touched
+    // before (an edit can un-apply) so we can refresh them afterwards.
+    const invoicesBefore = entity === 'Payment' ? await appliedInvoices(db, tenantId, ev.entity_id) : [];
     let outcome: EventOutcome;
     if (!entity) {
       outcome = 'ignored';
@@ -38,6 +42,13 @@ export async function processWebhookEvent(db: Db, client: QboClient, eventRowId:
       if (ev.operation === 'merged' && entity === 'Customer') {
         const loserId = mergedAwayId(ev.data);
         if (loserId) await withTenant(db, tenantId, (tx) => markDeleted(tx, tenantId, 'Customer', loserId, ev.entity_id));
+      }
+    }
+
+    if (entity === 'Payment' && (outcome === 'applied' || outcome === 'deleted')) {
+      const invoicesAfter = await appliedInvoices(db, tenantId, ev.entity_id);
+      for (const invoiceId of new Set([...invoicesBefore, ...invoicesAfter])) {
+        await fetchAndApply(db, client, 'Invoice', invoiceId);
       }
     }
 
@@ -81,6 +92,13 @@ export async function fetchAndApply(db: Db, client: QboClient, entity: MirrorEnt
   if (!obj) throw new Error(`QuickBooks returned no ${entity} for id ${id}`);
   const changed = await withTenant(db, tenantId, (tx) => applyEntity(tx, tenantId, entity, obj));
   return changed ? 'applied' : 'unchanged';
+}
+
+async function appliedInvoices(db: Db, tenantId: string, paymentId: string): Promise<string[]> {
+  const rows = await withTenant(db, tenantId, (tx) =>
+    tx.selectFrom('qbo_payment_applications').select('invoice_qbo_id').where('payment_qbo_id', '=', paymentId).execute(),
+  );
+  return rows.map((r) => r.invoice_qbo_id);
 }
 
 /** Merge events may name the absorbed record in `data`; the field name isn't pinned down, so look for it loosely. */

@@ -10,8 +10,5 @@
     "@co/db": "workspace:*",
     "@co/qbo": "workspace:*",
     "@co/shared": "workspace:*"
-  },
-  "devDependencies": {
-    "@co/api": "workspace:*"
   }
 }
