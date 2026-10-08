@@ -1,0 +1,16 @@
+{
+  "name": "@co/qbo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@co/crypto": "workspace:*",
+    "@co/db": "workspace:*",
+    "@co/shared": "workspace:*",
+    "kysely": "^0.29.6",
+    "zod": "^4.6.5"
+  }
+}

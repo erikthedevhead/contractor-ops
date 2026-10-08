@@ -1,0 +1,107 @@
+/**
+ * In-memory QuickBooks Online fake, plugged in through QboClient's fetchFn.
+ *
+ * Implements just enough behavior to test our integration honestly:
+ * - creates assign Id/SyncToken/MetaData and line Ids; totals computed from lines
+ * - requestid dedupe: same requestid returns the original response, no new object
+ * - duplicate Item/Customer names fail with Fault code 6240
+ * - payments reduce invoice Balance and bump the invoice's SyncToken
+ * - `select * from X [where F = 'v'] orderby ... startposition N maxresults M`
+ * - fault injection hooks (Day 6 builds on this): queue statuses to return
+ */
+type Obj = Record<string, any>;
+
+export class FakeQbo {
+  readonly store = new Map<string, Map<string, Obj>>();
+  readonly requests: Array<{ method: string; path: string; requestId: string | null }> = [];
+  private readonly byRequestId = new Map<string, unknown>();
+  private nextId = 1000;
+  private clock = Date.parse('2026-01-01T00:00:00Z');
+  /** Statuses to return before handling normally, e.g. [429, 503]. */
+  readonly injected: number[] = [];
+
+  constructor() {
+    this.put('Account', { Id: '1', SyncToken: '0', Name: 'Services', AccountType: 'Income', Active: true, MetaData: this.meta() });
+    this.put('Account', { Id: '2', SyncToken: '0', Name: 'Sales of Product Income', AccountType: 'Income', Active: true, MetaData: this.meta() });
+  }
+
+  fetch = async (input: string, init?: RequestInit): Promise<Response> => {
+    const url = new URL(input);
+    const method = init?.method ?? 'GET';
+    const path = url.pathname.replace(/^\/v3\/company\/[^/]+/, '');
+    const requestId = url.searchParams.get('requestid');
+    this.requests.push({ method, path, requestId });
+
+    const injected = this.injected.shift();
+    if (injected) return json(injected, injected === 429 ? {} : { Fault: { Error: [{ Message: 'injected' }] } });
+
+    if (method === 'GET' && path === '/query') return this.query(url.searchParams.get('query') ?? '');
+    if (method === 'POST') {
+      if (requestId && this.byRequestId.has(requestId)) return json(200, this.byRequestId.get(requestId));
+      const entity = capitalize(path.slice(1));
+      const res = this.create(entity, JSON.parse(String(init?.body ?? '{}')));
+      if (res.status === 200 && requestId) this.byRequestId.set(requestId, res.body);
+      return json(res.status, res.body);
+    }
+    return json(404, { Fault: { Error: [{ code: '610', Message: 'Object Not Found' }] } });
+  };
+
+  all(entity: string): Obj[] {
+    return [...(this.store.get(entity)?.values() ?? [])];
+  }
+
+  private meta() {
+    this.clock += 1000;
+    const t = new Date(this.clock).toISOString();
+    return { CreateTime: t, LastUpdatedTime: t };
+  }
+
+  private put(entity: string, obj: Obj) {
+    if (!this.store.has(entity)) this.store.set(entity, new Map());
+    this.store.get(entity)!.set(obj.Id, obj);
+  }
+
+  private create(entity: string, body: Obj): { status: number; body: unknown } {
+    const nameField = entity === 'Item' ? 'Name' : entity === 'Customer' ? 'DisplayName' : null;
+    if (nameField && this.all(entity).some((o) => o[nameField] === body[nameField])) {
+      return { status: 400, body: { Fault: { type: 'ValidationFault', Error: [{ code: '6240', Message: 'Duplicate Name Exists Error' }] } } };
+    }
+    const obj: Obj = { ...body, Id: String(this.nextId++), SyncToken: '0', MetaData: this.meta() };
+    if (Array.isArray(obj.Line) && (entity === 'Estimate' || entity === 'Invoice')) {
+      obj.Line = obj.Line.map((l: Obj, i: number) => ({ Id: String(i + 1), LineNum: i + 1, ...l }));
+      obj.TotalAmt = round2(obj.Line.reduce((s: number, l: Obj) => s + l.Amount, 0));
+      if (entity === 'Invoice') obj.Balance = obj.TotalAmt;
+    }
+    if (entity === 'Payment') {
+      for (const line of obj.Line ?? []) {
+        for (const link of line.LinkedTxn ?? []) {
+          const inv = this.store.get('Invoice')?.get(link.TxnId);
+          if (!inv) return { status: 400, body: { Fault: { Error: [{ code: '610', Message: 'Invoice not found' }] } } };
+          inv.Balance = round2(inv.Balance - line.Amount);
+          inv.SyncToken = String(Number(inv.SyncToken) + 1);
+          inv.MetaData = { ...inv.MetaData, LastUpdatedTime: this.meta().LastUpdatedTime };
+        }
+      }
+    }
+    this.put(entity, obj);
+    return { status: 200, body: { [entity]: obj, time: new Date(this.clock).toISOString() } };
+  }
+
+  private query(q: string): Response {
+    const m = /^select \* from (\w+)(?: where (\w+) = '((?:\\.|[^'])*)')?(?: orderby [\w.]+)?(?: startposition (\d+))?(?: maxresults (\d+))?$/i.exec(q.trim());
+    if (!m) return json(400, { Fault: { Error: [{ code: '4000', Message: `fake cannot parse: ${q}` }] } });
+    const [, entity, field, rawValue, start, max] = m;
+    let rows = this.all(entity!).sort((a, b) => a.MetaData.LastUpdatedTime.localeCompare(b.MetaData.LastUpdatedTime));
+    if (field) {
+      const value = rawValue!.replace(/\\(.)/g, '$1');
+      rows = rows.filter((r) => String(r[field]) === value);
+    }
+    const s = Number(start ?? 1) - 1;
+    const page = rows.slice(s, s + Number(max ?? 100));
+    return json(200, { QueryResponse: page.length ? { [entity!]: page, startPosition: s + 1, maxResults: page.length } : {} });
+  }
+}
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
