@@ -15,7 +15,7 @@ export interface OfficeManagerAppDeps extends AgentDeps {
 
 const ChatBody = z.object({
   message: z.string().min(1).max(4000),
-  conversation_id: z.uuid().optional(),
+  conversation_id: z.uuid().nullish(), // the web page sends null before the first reply
 });
 
 type Authed = Request & { principal?: { tenantId: string; apiKeyId: string; key: string } };
@@ -79,7 +79,7 @@ export function createOfficeManagerApp(deps: OfficeManagerAppDeps) {
     const body = ChatBody.safeParse(req.body);
     if (!body.success) return void res.status(400).json({ error: 'invalid_request', details: body.error.issues.map((i) => i.message) });
     const p = req.principal!;
-    const r = await runTurn(deps, { tenantId: p.tenantId, apiKey: p.key, message: body.data.message, conversationId: body.data.conversation_id });
+    const r = await runTurn(deps, { tenantId: p.tenantId, apiKey: p.key, message: body.data.message, conversationId: body.data.conversation_id ?? undefined });
     res.status(r.status === 'rejected_spend_cap' ? 402 : 200).json({
       conversation_id: r.conversationId,
       run_id: r.runId,

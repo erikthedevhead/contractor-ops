@@ -14,7 +14,7 @@ let base: string;
 beforeAll(async () => {
   w = await setupWorld();
   llm = new FakeLlm(() => 'smalltalk');
-  const app = createOfficeManagerApp({ db: w.db, llm, prices: w.prices, toolbox: (k) => connectToolbox(w.mcpUrl, k), log: w.silent, rateLimitPerMinute: 4 });
+  const app = createOfficeManagerApp({ db: w.db, llm, prices: w.prices, toolbox: (k) => connectToolbox(w.mcpUrl, k), log: w.silent, rateLimitPerMinute: 5 });
   server = app.listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }, 60_000);
@@ -44,6 +44,12 @@ describe('office manager HTTP API', () => {
 
   it('rejects a missing or invalid key', async () => {
     expect((await chat({ message: 'hi' }, 'nope')).status).toBe(401);
+  });
+
+  it('accepts conversation_id: null on the first message (what the web page sends)', async () => {
+    llm.queue(() => reply.text('Hi.'));
+    const r = await chat({ message: 'hello', conversation_id: null });
+    expect(r.status).toBe(200);
   });
 
   it('validates the body', async () => {

@@ -194,11 +194,11 @@ async function send() {
   const t0 = Date.now();
   const tick = setInterval(() => { const s = pending.querySelector('.working span'); if (s) s.textContent = Math.round((Date.now() - t0) / 1000); }, 1000);
   try {
-    const res = await fetch('chat', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key }, body: JSON.stringify({ message: text, conversation_id: conversationId }) });
+    const res = await fetch('chat', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key }, body: JSON.stringify(conversationId ? { message: text, conversation_id: conversationId } : { message: text }) });
     const body = await res.json().catch(() => ({}));
     if (res.status === 401) { pending.classList.add('error'); pending.innerHTML = '<p>That key was not accepted. Use "Forget key" and paste a valid one.</p>'; return; }
     if (res.status === 429) { pending.classList.add('error'); pending.innerHTML = '<p>Too many messages in a minute. Wait a moment, then send again.</p>'; return; }
-    if (!res.ok && res.status !== 402) { pending.classList.add('error'); pending.innerHTML = '<p>The Office Manager returned an error (' + res.status + '). Send the message again.</p>'; return; }
+    if (!res.ok && res.status !== 402) { pending.classList.add('error'); pending.innerHTML = '<p>The Office Manager returned an error (' + res.status + (body.details ? ': ' + esc(body.details.join('; ')) : '') + '). Send the message again.</p>'; return; }
     conversationId = body.conversation_id || conversationId;
     if (body.status !== 'completed') pending.classList.add('error');
     pending.innerHTML = renderMarkdown(body.reply || '') + trace(body);
