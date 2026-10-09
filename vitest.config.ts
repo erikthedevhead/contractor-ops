@@ -14,13 +14,13 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          include: ['packages/*/test/**/*.unit.test.ts', 'apps/*/test/**/*.unit.test.ts', 'scripts/test/**/*.unit.test.ts'],
+          include: ['packages/*/test/**/*.unit.test.ts', 'apps/*/test/**/*.unit.test.ts', 'scripts/test/**/*.unit.test.ts', 'evals/test/**/*.unit.test.ts'],
         },
       },
       {
         test: {
           name: 'db',
-          include: ['packages/*/test/**/*.db.test.ts', 'apps/*/test/**/*.db.test.ts', 'scripts/test/**/*.db.test.ts'],
+          include: ['packages/*/test/**/*.db.test.ts', 'apps/*/test/**/*.db.test.ts', 'scripts/test/**/*.db.test.ts', 'evals/test/**/*.db.test.ts'],
           fileParallelism: false, // one shared database
         },
       },

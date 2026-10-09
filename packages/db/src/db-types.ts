@@ -378,6 +378,10 @@ export interface SyncCursors {
 
 export interface Tenants {
   created_at: Generated<Timestamp>;
+  /**
+   * Evaluation tenants only: overrides "today" for date-relative answers. NULL for real tenants.
+   */
+  frozen_today: string | null;
   id: Generated<string>;
   monthly_spend_cap_usd: Generated<Numeric>;
   name: string;

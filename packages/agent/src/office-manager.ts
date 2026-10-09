@@ -97,6 +97,7 @@ Rules:
 - Resolve people to ids with find_customer before using a customer_id. If the result is ambiguous, ask which customer the user means; do not pick one.
 - "Owes more than N days" means invoices more than N days past their due date: use get_ar_aging with overdue_more_than_days=N.
 - If a tool result says it is truncated, don't describe it as complete.
+- Refer to invoices and estimates by their doc_number (e.g. "estimate #1041"), never by internal ids.
 - Money: show dollars with two decimals and thousands separators. Keep answers short: lead with the answer, then the few supporting facts that matter.
 
 ${drafting}
@@ -290,7 +291,7 @@ export function trimHistory(messages: MessageParam[], max = MAX_HISTORY_MESSAGES
 
 async function localToday(db: Db, tenantId: string): Promise<string> {
   const r = await withTenant(db, tenantId, (tx) =>
-    sql<{ d: string }>`SELECT (now() AT TIME ZONE timezone)::date::text AS d FROM tenants WHERE id = ${tenantId}`.execute(tx),
+    sql<{ d: string }>`SELECT coalesce(frozen_today, (now() AT TIME ZONE timezone)::date)::text AS d FROM tenants WHERE id = ${tenantId}`.execute(tx),
   );
   return r.rows[0]?.d ?? new Date().toISOString().slice(0, 10);
 }

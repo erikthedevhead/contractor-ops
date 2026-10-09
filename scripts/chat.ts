@@ -18,11 +18,17 @@ for (;;) {
   const message = (await rl.question('you> ')).trim();
   if (!message) continue;
   if (message === 'exit') break;
-  const res = await fetch(`${base}/chat`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ message, conversation_id: conversationId }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ message, conversation_id: conversationId }),
+    });
+  } catch (err) {
+    console.log(`[can't reach the Office Manager at ${base}: ${(err as Error).cause ?? (err as Error).message}]\n`);
+    continue;
+  }
   const body = (await res.json()) as Record<string, any>;
   if (!res.ok && res.status !== 402) {
     console.log(`[HTTP ${res.status}] ${JSON.stringify(body)}\n`);

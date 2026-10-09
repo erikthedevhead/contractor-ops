@@ -23,6 +23,14 @@ export class FakeQbo {
   private readonly deleted = new Map<string, Map<string, string>>();
   /** Max objects per entity in a CDC response (Intuit: 1000). */
   cdcCap = 1000;
+  /**
+   * Auth simulation. null = accept any bearer token. Otherwise only this
+   * access token is accepted (others get 401), and the token endpoint issues
+   * a new one and accepts only that from then on (rotation).
+   */
+  acceptedToken: string | null = null;
+  private tokenSeq = 0;
+  readonly tokenRequests: string[] = [];
 
   constructor() {
     this.put('Account', { Id: '1', SyncToken: '0', Name: 'Services', AccountType: 'Income', Active: true, MetaData: this.meta() });
@@ -31,6 +39,11 @@ export class FakeQbo {
 
   fetch = async (input: string, init?: RequestInit): Promise<Response> => {
     const url = new URL(input);
+    if (url.hostname === 'oauth.platform.intuit.com') return this.token(init);
+    if (this.acceptedToken !== null) {
+      const auth = new Headers(init?.headers).get('authorization');
+      if (auth !== `Bearer ${this.acceptedToken}`) return json(401, { Fault: { type: 'AUTHENTICATION', Error: [{ code: '3200', Message: 'AuthenticationFailed' }] } });
+    }
     const method = init?.method ?? 'GET';
     const path = url.pathname.replace(/^\/v3\/company\/[^/]+/, '');
     const requestId = url.searchParams.get('requestid');
@@ -57,6 +70,14 @@ export class FakeQbo {
     }
     return json(404, { Fault: { Error: [{ code: '610', Message: 'Object Not Found' }] } });
   };
+
+  private token(init?: RequestInit): Response {
+    const form = new URLSearchParams(String(init?.body ?? ''));
+    this.tokenRequests.push(form.get('grant_type') ?? '');
+    const access = `fake-access-${++this.tokenSeq}`;
+    this.acceptedToken = access;
+    return json(200, { access_token: access, refresh_token: `fake-refresh-${this.tokenSeq}`, token_type: 'bearer', expires_in: 3600, x_refresh_token_expires_in: 8_726_400 });
+  }
 
   /** Simulate an edit made in the QuickBooks UI: bumps SyncToken and LastUpdatedTime. */
   update(entity: string, id: string, patch: Obj): Obj {

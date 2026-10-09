@@ -22,31 +22,20 @@ const app = createOfficeManagerApp({
 });
 const server = app.listen(port, '127.0.0.1', () => logger.info({ port, mcpUrl, estimatorUrl }, 'office manager listening'));
 
-// Startup probe for the Estimator's Agent Card (A2A discovery).
+// Startup probe for the Estimator's Agent Card (A2A discovery). PM2 starts all
+// apps at once, so retry for ~15s before warning.
 if (estimatorUrl !== 'off') {
-  fetch(`${estimatorUrl}/.well-known/agent-card.json`)
-    .then(async (r) => {
-      const card = r.ok ? ((await r.json()) as { name?: string }) : null;
-      if (card?.name) logger.info({ estimatorUrl, agent: card.name }, 'estimator agent card found');
-      else logger.warn({ estimatorUrl, status: r.status }, 'estimator agent card not found; estimate requests will fail');
-    })
-    .catch((err) => logger.error({ estimatorUrl, err: String(err) }, 'estimator unreachable at startup'));
+  void (async () => {
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      try {
+        const r = await fetch(`${estimatorUrl}/.well-known/agent-card.json`);
+        const card = r.ok ? ((await r.json()) as { name?: string }) : null;
+        if (card?.name) return logger.info({ estimatorUrl, agent: card.name, attempt }, 'estimator agent card found');
+      } catch {
+        /* not up yet */
+      }
+      await new Promise((ok) => setTimeout(ok, 2000));
+    }
+    logger.warn({ estimatorUrl }, 'estimator agent card not found after 15s; estimate requests will fail until it is up');
+  })();
 }
-
-// Startup probe: an unauthenticated request must reach OUR MCP server and be
-// refused with our realm. Catches a wrong or unreachable MCP_URL at boot
-// instead of on the first user question.
-fetch(mcpUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-  .then((r) => {
-    const ours = r.status === 401 && (r.headers.get('www-authenticate') ?? '').includes('contractor-ops');
-    if (ours) logger.info({ mcpUrl }, 'mcp server reachable');
-    else logger.warn({ mcpUrl, status: r.status }, 'MCP_URL did not answer like this app\'s MCP server; check MCP_URL (a shell export overrides .env)');
-  })
-  .catch((err) => logger.error({ mcpUrl, err: String(err) }, 'MCP server unreachable at startup; agent turns will fail until it is up'));
-
-const shutdown = () => {
-  server.close(() => void db.destroy().then(() => process.exit(0)));
-  setTimeout(() => process.exit(1), 15_000).unref();
-};
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);

@@ -14,7 +14,7 @@ const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 /** "Today" in the contractor's timezone; aging and expiry depend on it. */
 export async function tenantToday(tx: Tx, tenantId: string): Promise<string> {
-  const r = await sql<{ d: string }>`SELECT (now() AT TIME ZONE timezone)::date::text AS d FROM tenants WHERE id = ${tenantId}`.execute(tx);
+  const r = await sql<{ d: string }>`SELECT coalesce(frozen_today, (now() AT TIME ZONE timezone)::date)::text AS d FROM tenants WHERE id = ${tenantId}`.execute(tx);
   return r.rows[0]?.d ?? new Date().toISOString().slice(0, 10);
 }
 

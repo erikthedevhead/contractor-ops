@@ -27,7 +27,8 @@
     "mcp:call": "tsx --env-file=.env scripts/mcp-call.ts",
     "chat": "tsx scripts/chat.ts",
     "dev:agent": "tsx watch --env-file=.env apps/office-manager/src/main.ts",
-    "dev:estimator": "tsx watch --env-file=.env apps/estimator/src/main.ts"
+    "dev:estimator": "tsx watch --env-file=.env apps/estimator/src/main.ts",
+    "eval": "tsx --env-file=.env evals/cli.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
@@ -35,8 +36,7 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3",
-    "@modelcontextprotocol/client": "^2.3.1",
-    "@co/agent": "workspace:*"
+    "@modelcontextprotocol/client": "^2.3.1"
   },
   "dependencies": {
     "@co/crypto": "workspace:*",
@@ -44,6 +44,8 @@
     "@co/qbo": "workspace:*",
     "@co/shared": "workspace:*",
     "kysely": "^0.29.6",
-    "@co/mcp": "workspace:*"
+    "@co/mcp": "workspace:*",
+    "@co/worker": "workspace:*",
+    "@co/agent": "workspace:*"
   }
 }

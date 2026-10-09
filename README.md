@@ -13,7 +13,7 @@ architecture diagram and eval results land at the end of the week.
 | 3 | MCP server (SDK v2), tenant-scoped API keys, two-step write | done |
 | 4 | Office Manager agent loop, cost metering, spend caps | done |
 | 5 | Estimator agent over A2A | done |
-| 6 | Evals + fault injection | |
+| 6 | Evals + fault injection | harness done; results in docs/eval-report.md |
 | 7 | Deploy, docs, demo | |
 
 ## What Day 1 proves
@@ -125,6 +125,27 @@ architecture diagram and eval results land at the end of the week.
   by `parent_run_id`; one query gives the total cost of "draft an estimate"
   across both agents.
 
+## What Day 6 proves
+
+- **Evals with real models and exact ground truth.** 35 cases across lookups,
+  calculations, refusals, ambiguity, estimate quality, write safety and fault
+  injection, each run 3x. The data is a hermetic seeded world (fake
+  QuickBooks, "today" pinned), so ground truth is exact; the models, MCP server,
+  A2A Estimator and agent loop are the real ones. Ground truth is derived from
+  the seed plan and pinned to hand-verified figures by a unit test.
+- **Reported the way you'd want to read it:** accuracy, flaky cases (mixed
+  outcomes across iterations), tool-call correctness, cost per run across both
+  agents, and categorized failure modes (`docs/eval-report.md`).
+- **Fault injection through the real code paths:** QuickBooks 429 storms on the
+  approved write, an access token revoked mid-task (real refresh through a fake
+  token endpoint), duplicate concurrent webhook deliveries, and an outage past
+  all retries followed by a user-requested retry. Each must end with exactly
+  one write or none.
+- **A safety invariant checked on every run:** the read-only tenant must see
+  zero QuickBooks writes.
+- `docs/failure-modes.md` lists the failures found while building against the
+  real sandbox and models, with the fix and the test that now guards each.
+
 ## Operating it
 
 ```bash
@@ -133,6 +154,8 @@ pnpm reconcile <tenant-id>    # run CDC reconcile now
 pnpm dlq list                 # dead-lettered jobs
 pnpm dlq replay <id>          # requeue one
 pnpm webhooks:reingest <id>   # replay a stored delivery through the current parser
+pnpm eval                     # full eval suite, real models, local DB (~$2-4)
+pnpm eval --cases L0,W0 --iterations 1   # a subset
 bash infra/deploy.sh          # deploy to the droplet
 pnpm dev:agent                # Office Manager on :3200 (needs pnpm dev running)
 pnpm dev:estimator            # Estimator (A2A) on :3300
@@ -171,4 +194,5 @@ packages/db         SQL migrations, runner, Kysely client, withTenant/asSystem
 packages/qbo        OAuth, TokenStore, QboClient (retry/meter), mirror upserts, sync
 scripts/            keygen, tenant:create/link, seed:sandbox, sync:initial
 docs/decisions.md   why things are the way they are
+evals/              eval world, 35 cases, runner, report
 ```
