@@ -1,5 +1,5 @@
 /** co-office-manager: the user-facing agent. Talks to data only through the MCP server. */
-import { anthropicClient, connectToolbox, PriceBook } from '@co/agent';
+import { a2aEstimateDelegate, anthropicClient, connectToolbox, PriceBook } from '@co/agent';
 import { createDb } from '@co/db';
 import { env, logger } from '@co/shared';
 import { createOfficeManagerApp } from './app';
@@ -8,6 +8,8 @@ const e = env();
 if (!e.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set');
 const port = Number(process.env.OFFICE_MANAGER_PORT ?? 3200);
 const mcpUrl = process.env.MCP_URL ?? `http://127.0.0.1:${e.PORT}/mcp`;
+// A2A: estimating is delegated to the Estimator agent. Set ESTIMATOR_URL=off to disable.
+const estimatorUrl = process.env.ESTIMATOR_URL ?? 'http://127.0.0.1:3300';
 
 const db = createDb(e.DATABASE_URL, { max: 5 });
 const prices = await PriceBook.load(db);
@@ -16,8 +18,20 @@ const app = createOfficeManagerApp({
   llm: anthropicClient(e.ANTHROPIC_API_KEY),
   prices,
   toolbox: (apiKey) => connectToolbox(mcpUrl, apiKey, 'office-manager'),
+  ...(estimatorUrl === 'off' ? {} : { delegate: a2aEstimateDelegate(estimatorUrl) }),
 });
-const server = app.listen(port, '127.0.0.1', () => logger.info({ port, mcpUrl }, 'office manager listening'));
+const server = app.listen(port, '127.0.0.1', () => logger.info({ port, mcpUrl, estimatorUrl }, 'office manager listening'));
+
+// Startup probe for the Estimator's Agent Card (A2A discovery).
+if (estimatorUrl !== 'off') {
+  fetch(`${estimatorUrl}/.well-known/agent-card.json`)
+    .then(async (r) => {
+      const card = r.ok ? ((await r.json()) as { name?: string }) : null;
+      if (card?.name) logger.info({ estimatorUrl, agent: card.name }, 'estimator agent card found');
+      else logger.warn({ estimatorUrl, status: r.status }, 'estimator agent card not found; estimate requests will fail');
+    })
+    .catch((err) => logger.error({ estimatorUrl, err: String(err) }, 'estimator unreachable at startup'));
+}
 
 // Startup probe: an unauthenticated request must reach OUR MCP server and be
 // refused with our realm. Catches a wrong or unreachable MCP_URL at boot

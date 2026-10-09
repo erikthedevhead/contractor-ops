@@ -12,7 +12,7 @@ architecture diagram and eval results land at the end of the week.
 | 2 | Webhooks (CloudEvents), job queue, idempotency, retries, dead-letter, CDC reconciliation | done |
 | 3 | MCP server (SDK v2), tenant-scoped API keys, two-step write | done |
 | 4 | Office Manager agent loop, cost metering, spend caps | done |
-| 5 | Estimator agent over A2A | |
+| 5 | Estimator agent over A2A | done |
 | 6 | Evals + fault injection | |
 | 7 | Deploy, docs, demo | |
 
@@ -104,6 +104,27 @@ architecture diagram and eval results land at the end of the week.
   approval. A model that "helpfully" confirms its own draft is stopped and the
   attempt is recorded as a guard step. Tested across four turns.
 
+## What Day 5 proves
+
+- **MCP for agent-to-tool, A2A for agent-to-agent.** The Estimator is a separate
+  service speaking A2A v1.0 through the official `@a2a-js/sdk`: Agent Card at
+  `/.well-known/agent-card.json` (one skill, Bearer auth), JSON-RPC transport,
+  tasks persisted in Postgres. The Office Manager discovers it from the card and
+  delegates every estimating request to it; both agents reach data only via MCP.
+- **Identity propagates across agents.** The caller's API key travels
+  user -> Office Manager -> (A2A) -> Estimator -> (MCP) -> data, so every hop acts
+  for the same tenant with the same scopes. A2A tasks are owner-scoped per
+  tenant (tested: tenant B cannot read tenant A's task).
+- **An estimator that can't make things up.** It is never offered a write tool,
+  and its submission is validated in code: every item id and unit price must
+  appear in a comparable job it actually retrieved, and every comparable it cites
+  must be one it saw. Invented items or prices are bounced back for correction;
+  after three bad submissions the task fails with a reason. Line amounts and the
+  subtotal are computed in code, never taken from the model.
+- **Cost of a request across agents.** The Estimator meters its own run, linked
+  by `parent_run_id`; one query gives the total cost of "draft an estimate"
+  across both agents.
+
 ## Operating it
 
 ```bash
@@ -114,6 +135,7 @@ pnpm dlq replay <id>          # requeue one
 pnpm webhooks:reingest <id>   # replay a stored delivery through the current parser
 bash infra/deploy.sh          # deploy to the droplet
 pnpm dev:agent                # Office Manager on :3200 (needs pnpm dev running)
+pnpm dev:estimator            # Estimator (A2A) on :3300
 MCP_API_KEY=... pnpm chat     # talk to it
 pnpm api-key create <tenant> [--write]   # MCP key (shown once)
 MCP_API_KEY=... pnpm mcp:call get_ar_aging '{"overdue_more_than_days":60}'
@@ -140,6 +162,7 @@ apps/worker         job runner, handlers, nightly reconcile scheduler
 apps/mcp            MCP server: tools, API-key auth, guarded estimate write
 apps/core           co-core process: API + worker + MCP
 apps/office-manager co-office-manager process: /chat and /usage
+apps/estimator      co-estimator process: A2A server (Agent Card, JSON-RPC, Postgres task store)
 packages/agent      agent loop, router, pricing, spend cap, MCP toolbox
 infra/              PM2 file, nginx site, deploy script
 packages/shared     env validation, logger, error taxonomy, uuidv5

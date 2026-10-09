@@ -43,6 +43,15 @@ describe('router', () => {
   });
 });
 
+describe('renderToolResult', () => {
+  it('keeps oversized results valid JSON and marks them partial', async () => {
+    const { renderToolResult } = await import('../src/toolbox');
+    const out = JSON.parse(renderToolResult({ rows: 'x'.repeat(500) }, 100));
+    expect(out).toMatchObject({ result_truncated: true });
+    expect(out.partial_json).toHaveLength(100);
+  });
+});
+
 describe('trimHistory', () => {
   it('never cuts between a tool_use and its tool_result', () => {
     const msgs: MessageParam[] = [];

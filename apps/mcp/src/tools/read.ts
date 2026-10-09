@@ -243,7 +243,8 @@ export async function getCustomerJobHistory(tx: Tx, tenantId: string, args: { cu
   const includeLines = args.include_lines ?? true;
   const lineRows = includeLines && jobs.rows.length
     ? await sql<{ txn_type: string; txn_qbo_id: string; item_id: string | null; item_name: string | null; description: string | null; qty: string | null; unit_price: string | null; amount: string }>`
-        SELECT l.txn_type, l.txn_qbo_id, l.item_qbo_id AS item_id, it.name AS item_name, l.description,
+        SELECT l.txn_type, l.txn_qbo_id, l.item_qbo_id AS item_id, it.name AS item_name,
+               CASE WHEN length(l.description) > 80 THEN left(l.description, 77) || '...' ELSE l.description END AS description,
                l.qty::text, l.unit_price::text, l.amount::text
           FROM qbo_txn_lines l
           LEFT JOIN qbo_items it ON it.tenant_id = l.tenant_id AND it.qbo_id = l.item_qbo_id

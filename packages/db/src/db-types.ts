@@ -39,6 +39,25 @@ export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export type WebhookEventStatus = "failed" | "ignored" | "processed" | "processing" | "received";
 
+export interface A2aA2aTasksMigrations {
+  name: string;
+  timestamp: string;
+}
+
+export interface A2aTasks {
+  artifacts: string | null;
+  context_id: string;
+  history: string | null;
+  id: string;
+  metadata: string | null;
+  owner: string;
+  protocol_version: string | null;
+  status: string | null;
+  status_last_updated: Int8;
+  status_state: string | null;
+  tenant: string;
+}
+
 export interface AgentRuns {
   a2a_task_id: string | null;
   agent: AgentName;
@@ -400,6 +419,8 @@ export interface WebhookEvents {
 }
 
 export interface DB {
+  a2a_a2a_tasks_migrations: A2aA2aTasksMigrations;
+  a2a_tasks: A2aTasks;
   agent_runs: AgentRuns;
   agent_steps: AgentSteps;
   api_keys: ApiKeys;

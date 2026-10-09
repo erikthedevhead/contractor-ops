@@ -91,6 +91,33 @@ importers:
         specifier: workspace:*
         version: link:../worker
 
+  apps/estimator:
+    dependencies:
+      '@a2a-js/sdk':
+        specifier: ^1.3.0
+        version: 1.3.0(express@5.2.1)(kysely@0.29.6)(mysql2@3.15.3)(pg@8.23.1)
+      '@co/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
+      '@co/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@co/mcp':
+        specifier: workspace:*
+        version: link:../mcp
+      '@co/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+      kysely:
+        specifier: ^0.29.6
+        version: 0.29.6
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
+
   apps/mcp:
     dependencies:
       '@co/db':
@@ -160,6 +187,9 @@ importers:
 
   packages/agent:
     dependencies:
+      '@a2a-js/sdk':
+        specifier: ^1.3.0
+        version: 1.3.0(express@5.2.1)(kysely@0.29.6)(mysql2@3.15.3)(pg@8.23.1)
       '@anthropic-ai/sdk':
         specifier: ^0.133.0
         version: 0.133.0(zod@4.6.5)
@@ -175,6 +205,9 @@ importers:
       kysely:
         specifier: ^0.29.6
         version: 0.29.6
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
 
   packages/crypto: {}
 
@@ -225,6 +258,34 @@ importers:
         version: 4.6.5
 
 packages:
+
+  '@a2a-js/sdk@1.3.0':
+    resolution: {integrity: sha512-OpK4nygUnLKlpTFZlM2IrYu7f3c/B7c4u4Z14+vgMq24lEINTVCxH/BqZx+GL92rNf7CoBL5oTP5UhNsl75yyg==}
+    engines: {node: '>=20'}
+    hasBin: true
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.10.2
+      '@grpc/grpc-js': ^1.11.0
+      better-sqlite3: ^12.0.0 || ^13.0.0
+      express: ^4.21.2 || ^5.1.0
+      kysely: ^0.28.17 || ^0.29.0
+      mysql2: ^3.0.0
+      pg: ^8.0.0
+    peerDependenciesMeta:
+      '@bufbuild/protobuf':
+        optional: true
+      '@grpc/grpc-js':
+        optional: true
+      better-sqlite3:
+        optional: true
+      express:
+        optional: true
+      kysely:
+        optional: true
+      mysql2:
+        optional: true
+      pg:
+        optional: true
 
   '@anthropic-ai/sdk@0.133.0':
     resolution: {integrity: sha512-jlqUN8p8ESTJj+GJnA4KjzbEfF1waEoGzRT8jwytlYGFFgv+/DUQOxlYGvYw10UzhD1kwLqYzxvA3FrTB2YWuQ==}
@@ -1593,6 +1654,15 @@ packages:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
 snapshots:
+
+  '@a2a-js/sdk@1.3.0(express@5.2.1)(kysely@0.29.6)(mysql2@3.15.3)(pg@8.23.1)':
+    dependencies:
+      jose: 6.2.12
+    optionalDependencies:
+      express: 5.2.1
+      kysely: 0.29.6
+      mysql2: 3.15.3
+      pg: 8.23.1
 
   '@anthropic-ai/sdk@0.133.0(zod@4.6.5)':
     dependencies:

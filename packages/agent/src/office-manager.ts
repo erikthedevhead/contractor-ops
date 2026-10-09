@@ -1,20 +1,25 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'kysely';
-import type { ContentBlock, ContentBlockParam, Message, MessageParam, ToolResultBlockParam, ToolUseBlock } from '@anthropic-ai/sdk/resources/messages';
+import type { ContentBlock, ContentBlockParam, Message, MessageParam, Tool, ToolResultBlockParam, ToolUseBlock } from '@anthropic-ai/sdk/resources/messages';
 import { withTenant, type Db } from '@co/db';
 import { logger as baseLogger, type Logger } from '@co/shared';
+import { DelegationFailed, type EstimateDelegate } from './a2a-client';
 import { MODELS, type LlmClient } from './llm';
-import type { PriceBook, TokenUsage } from './pricing';
+import type { PriceBook } from './pricing';
 import { route, type Intent, type Route } from './router';
-import { reserveSpend, settleSpend, SpendCapExceeded } from './spend';
+import { RunRecorder, type StepSummary } from './run';
+import { SpendCapExceeded } from './spend';
 import { renderToolResult, type Toolbox } from './toolbox';
 
 /**
  * The Office Manager agent. No framework: one loop, every step written to
- * agent_steps (llm | tool | guard), every model call to llm_calls with its
- * cost, every call pre-authorized against the tenant's monthly spend cap.
+ * agent_steps (llm | tool | a2a | guard | error), every model call metered
+ * and pre-authorized against the tenant's spend cap (see RunRecorder).
  *
- *   route (fast model) -> [model call -> tool calls]* -> answer
+ *   route (fast model) -> [model call -> tool calls | A2A delegation]* -> answer
+ *
+ * MCP for agent-to-tool (its data tools), A2A for agent-to-agent (estimating
+ * is delegated to the Estimator agent, a separate service).
  */
 
 export interface AgentDeps {
@@ -22,6 +27,8 @@ export interface AgentDeps {
   llm: LlmClient;
   prices: PriceBook;
   toolbox: (apiKey: string) => Promise<Toolbox>;
+  /** A2A delegation to the Estimator. When absent, the Office Manager drafts estimates itself. */
+  delegate?: EstimateDelegate;
   log?: Logger;
 }
 
@@ -32,14 +39,6 @@ export interface TurnInput {
   conversationId?: string;
   evalCaseId?: string;
   maxSteps?: number;
-}
-
-export interface StepSummary {
-  kind: 'llm' | 'tool' | 'guard' | 'error';
-  name: string;
-  ok: boolean;
-  ms: number;
-  costUsd?: number;
 }
 
 export type TurnStatus = 'completed' | 'rejected_spend_cap' | 'failed' | 'max_steps';
@@ -63,7 +62,32 @@ const MAX_TOKENS: Record<string, number> = { [MODELS.fast]: 4096, [MODELS.smart]
 
 interface IssuedToken { token: string; run_id: string; issued_at: string }
 
-export function systemPrompt(today: string): string {
+export const DELEGATE_TOOL: Tool = {
+  name: 'delegate_estimate',
+  description: 'Ask the Estimator agent (via A2A) to size and price a job from comparable past jobs. Returns line items with item ids, quantities, prices, the comparable jobs used, and assumptions. Nothing is written.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      job_description: { type: 'string', description: 'What the job is, with any size/finish details the user gave' },
+      customer_id: { type: 'string', description: 'From find_customer, if known' },
+    },
+    required: ['job_description'],
+  },
+};
+
+export function systemPrompt(today: string, opts: { delegation: boolean } = { delegation: false }): string {
+  const drafting = opts.delegation
+    ? `Drafting estimates:
+1. Resolve the customer with find_customer (ask if ambiguous).
+2. Call delegate_estimate with the job description and customer_id. The Estimator agent returns sized line items and its assumptions.
+3. Call create_estimate_draft WITHOUT a confirmation_token, using exactly the returned item ids, quantities and unit prices (adjust only what the user asked to change). Nothing is written yet.
+4. Show the user the preview (line items, subtotal) and the Estimator's assumptions, and ask them to approve.
+5. Only in a LATER message, and only if the user explicitly approves, call create_estimate_draft with just the confirmation_token.`
+    : `Drafting estimates:
+1. Find comparable past jobs with get_customer_job_history (query describing the job). Base line items, quantities and prices on those jobs; say which jobs you used.
+2. Call create_estimate_draft WITHOUT a confirmation_token to get a preview. Nothing is written yet.
+3. Show the user the preview (customer, line items, subtotal) and ask them to approve it.
+4. Only in a LATER message, and only if the user explicitly approves, call create_estimate_draft with just the confirmation_token.`;
   return `You are the office manager assistant for a small remodeling contractor. You answer questions about their QuickBooks data and draft estimates, using only the tools provided.
 
 Today is ${today} (the contractor's local date).
@@ -72,26 +96,22 @@ Rules:
 - Every number, name and date you state must come from a tool result in this conversation. Never estimate, round up, or invent figures. If the tools don't have the data, say so plainly.
 - Resolve people to ids with find_customer before using a customer_id. If the result is ambiguous, ask which customer the user means; do not pick one.
 - "Owes more than N days" means invoices more than N days past their due date: use get_ar_aging with overdue_more_than_days=N.
+- If a tool result says it is truncated, don't describe it as complete.
 - Money: show dollars with two decimals and thousands separators. Keep answers short: lead with the answer, then the few supporting facts that matter.
 
-Drafting estimates:
-1. Find comparable past jobs with get_customer_job_history (query describing the job). Base line items, quantities and prices on those jobs; say which jobs you used.
-2. Call create_estimate_draft WITHOUT a confirmation_token to get a preview. Nothing is written yet.
-3. Show the user the preview (customer, line items, subtotal) and ask them to approve it.
-4. Only in a LATER message, and only if the user explicitly approves, call create_estimate_draft with just the confirmation_token.
+${drafting}
 Never call create_estimate_draft with a confirmation_token in the same turn you produced the preview. The system blocks it anyway.
 
 If a tool returns an error, read its code and hint: fix the call (e.g. look up the right id) or explain the problem to the user. Do not retry the same failing call more than once.`;
 }
 
 export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnResult> {
-  const { db, llm, prices } = deps;
+  const { db, llm } = deps;
   const log = deps.log ?? baseLogger;
   const { tenantId } = input;
   const message = input.message.trim().slice(0, MAX_MESSAGE_CHARS);
   const maxSteps = input.maxSteps ?? 10;
 
-  // --- conversation + run bookkeeping ---------------------------------------
   const conv = await withTenant(db, tenantId, async (tx) => {
     if (input.conversationId) {
       const c = await tx.selectFrom('conversations').selectAll().where('id', '=', input.conversationId).executeTakeFirst();
@@ -102,80 +122,29 @@ export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnRe
   const history = conv.messages as unknown as MessageParam[];
   const issued = (conv.issued_tokens as unknown as IssuedToken[]).filter((t) => Date.now() - Date.parse(t.issued_at) < TOKEN_TTL_MS);
 
-  const run = await withTenant(db, tenantId, (tx) =>
-    tx.insertInto('agent_runs').values({
-      tenant_id: tenantId, agent: 'office_manager', user_input: message, conversation_id: conv.id, eval_case_id: input.evalCaseId ?? null,
-    }).returning('id').executeTakeFirstOrThrow(),
-  );
-  const runId = run.id;
-
-  let stepNo = 0;
-  let totalCost = 0;
-  const steps: StepSummary[] = [];
+  const rec = await RunRecorder.start(db, deps.prices, tenantId, 'office_manager', message, { conversationId: conv.id, evalCaseId: input.evalCaseId ?? null });
+  const runId = rec.runId;
   const toolCalls: TurnResult['toolCalls'] = [];
 
-  const recordStep = async (kind: StepSummary['kind'], name: string, data: { input?: unknown; output?: unknown; error?: unknown; ms: number }) => {
-    const n = ++stepNo;
-    await withTenant(db, tenantId, (tx) =>
-      tx.insertInto('agent_steps').values({
-        tenant_id: tenantId, run_id: runId, step_no: n, kind, name,
-        input: data.input === undefined ? null : JSON.stringify(data.input),
-        output: data.output === undefined ? null : JSON.stringify(data.output),
-        error: data.error === undefined ? null : JSON.stringify(data.error),
-        latency_ms: data.ms,
-      }).execute(),
-    );
-    return n;
-  };
-
-  /** Reserve -> call -> settle -> record. The only way this agent talks to a model. */
-  const callModel = async (purpose: 'route' | 'answer', model: string, estInput: number, maxTokens: number, fn: () => Promise<{ usage: TokenUsage; stop: string | null; output: unknown; latencyMs: number }>) => {
-    const reservation = await reserveSpend(db, tenantId, prices.worstCase(model, estInput, maxTokens));
-    let cost = 0;
-    try {
-      const r = await fn();
-      cost = prices.cost(model, r.usage);
-      totalCost += cost;
-      const n = await recordStep('llm', `${purpose}:${model}`, { output: r.output, ms: r.latencyMs });
+  const finish = async (status: TurnStatus, reply: string, rt: Route | null, messages: MessageParam[] | null, newIssued: IssuedToken[]): Promise<TurnResult> => {
+    if (messages) {
       await withTenant(db, tenantId, (tx) =>
-        tx.insertInto('llm_calls').values({
-          tenant_id: tenantId, run_id: runId, step_no: n, agent: 'office_manager', model, purpose,
-          input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens,
-          cache_read_tokens: r.usage.cache_read_input_tokens ?? 0, cache_write_tokens: r.usage.cache_creation_input_tokens ?? 0,
-          cost_usd: cost.toFixed(6), latency_ms: r.latencyMs, stop_reason: r.stop,
-        }).execute(),
+        tx.updateTable('conversations').set({ messages: JSON.stringify(trimHistory(messages)), issued_tokens: JSON.stringify(newIssued), updated_at: new Date() })
+          .where('id', '=', conv.id).execute(),
       );
-      steps.push({ kind: 'llm', name: `${purpose}:${model}`, ok: true, ms: r.latencyMs, costUsd: cost });
-    } finally {
-      await settleSpend(db, reservation, cost);
     }
-  };
-
-  const finish = async (status: TurnStatus, reply: string, rt: Route | null, messages: MessageParam[] | null, newIssued: IssuedToken[]) => {
-    await withTenant(db, tenantId, async (tx) => {
-      if (messages) {
-        await tx.updateTable('conversations').set({
-          messages: JSON.stringify(trimHistory(messages)),
-          issued_tokens: JSON.stringify(newIssued),
-          updated_at: new Date(),
-        }).where('id', '=', conv.id).execute();
-      }
-      await tx.updateTable('agent_runs').set({
-        status, final_output: reply, total_cost_usd: totalCost.toFixed(6), finished_at: new Date(),
-        intent: rt?.intent ?? null, model: rt?.model ?? null,
-      }).where('id', '=', runId).execute();
-    });
-    log.info({ tenantId, runId, status, intent: rt?.intent, model: rt?.model, costUsd: totalCost, steps: steps.length }, 'agent turn finished');
-    return { conversationId: conv.id, runId, status, reply, intent: rt?.intent ?? null, model: rt?.model ?? null, costUsd: totalCost, steps, toolCalls };
+    await rec.finish(status, reply, { intent: rt?.intent ?? null, model: rt?.model ?? null });
+    log.info({ tenantId, runId, status, intent: rt?.intent, model: rt?.model, costUsd: rec.totalCost, steps: rec.steps.length }, 'agent turn finished');
+    return { conversationId: conv.id, runId, status, reply, intent: rt?.intent ?? null, model: rt?.model ?? null, costUsd: rec.totalCost, steps: rec.steps, toolCalls };
   };
 
   let toolbox: Toolbox | undefined;
   let rt: Route | null = null;
   try {
-    // --- 1. route ----------------------------------------------------------
+    // --- 1. route ------------------------------------------------------------
     const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
     try {
-      await callModel('route', MODELS.fast, Math.ceil(message.length / 3) + 600, 64, async () => {
+      await rec.model('route', MODELS.fast, Math.ceil(message.length / 3) + 600, 64, async () => {
         rt = await route(llm, message, { draftPending: issued.length > 0, previousAssistant: lastAssistant ? textOf(lastAssistant.content) : undefined });
         return { usage: rt.usage, stop: rt.stopReason, output: { intent: rt.intent, model: rt.model }, latencyMs: rt.latencyMs };
       });
@@ -184,15 +153,16 @@ export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnRe
       // Routing is an optimization, not a dependency. Fail closed: answer on the
       // fast model as a plain lookup, which can never unlock a write.
       log.warn({ tenantId, runId, err: String(err) }, 'router failed; falling back to lookup');
-      await recordStep('guard', 'router_fallback', { error: { message: String(err) }, ms: 0 });
+      await rec.step('guard', 'router_fallback', { error: { message: String(err) }, ms: 0 });
       rt = { intent: 'lookup', model: MODELS.fast, usage: { input_tokens: 0, output_tokens: 0 }, routerModel: MODELS.fast, latencyMs: 0, stopReason: null };
     }
     const r = rt as unknown as Route;
     let liveTokens = r.intent === 'reject_draft' ? [] : [...issued];
 
-    // --- 2. tool loop --------------------------------------------------------
+    // --- 2. tool loop ----------------------------------------------------------
     toolbox = await deps.toolbox(input.apiKey);
     const today = await localToday(db, tenantId);
+    const tools = deps.delegate ? [...toolbox.tools(), DELEGATE_TOOL] : toolbox.tools();
     const messages: MessageParam[] = [...history, { role: 'user', content: message }];
     const tokensBefore = new Set(liveTokens.map((t) => t.token));
     const issuedThisTurn: IssuedToken[] = [];
@@ -202,14 +172,14 @@ export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnRe
       const params = {
         model: r.model,
         max_tokens: MAX_TOKENS[r.model] ?? 4096,
-        system: systemPrompt(today),
-        tools: toolbox.tools(),
+        system: systemPrompt(today, { delegation: Boolean(deps.delegate) }),
+        tools,
         messages,
         cache_control: { type: 'ephemeral' as const },
         output_config: { effort: 'medium' as const },
         metadata: { user_id: createHash('sha256').update(tenantId).digest('hex').slice(0, 32) },
       };
-      await callModel('answer', r.model, Math.ceil(JSON.stringify(params).length / 3), params.max_tokens, async () => {
+      await rec.model('answer', r.model, Math.ceil(JSON.stringify(params).length / 3), params.max_tokens, async () => {
         const started = performance.now();
         res = await llm.create(params);
         return {
@@ -221,8 +191,7 @@ export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnRe
 
       const uses = res.content.filter(isToolUse);
       if (res.stop_reason !== 'tool_use' || uses.length === 0) {
-        const reply = textOf(res.content) || '(no answer)';
-        return await finish('completed', reply, r, messages, [...liveTokens, ...issuedThisTurn]);
+        return await finish('completed', textOf(res.content) || '(no answer)', r, messages, [...liveTokens, ...issuedThisTurn]);
       }
 
       const results: ToolResultBlockParam[] = [];
@@ -233,17 +202,37 @@ export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnRe
         // --- write guard: step 2 needs a draft shown in an EARLIER turn and an explicit approval now
         const token = use.name === 'create_estimate_draft' && typeof args.confirmation_token === 'string' ? args.confirmation_token : null;
         if (token && !(r.intent === 'approve_draft' && tokensBefore.has(token))) {
-          const reason = r.intent !== 'approve_draft'
-            ? 'The user has not approved a draft in this message.'
-            : 'That token was not shown to the user in an earlier message.';
+          const reason = r.intent !== 'approve_draft' ? 'The user has not approved a draft in this message.' : 'That token was not shown to the user in an earlier message.';
           const body = { error: { code: 'CONFIRMATION_REQUIRED', message: `${reason} Show the preview and wait for explicit approval.`, retryable: false } };
-          await recordStep('guard', 'write_guard', { input: { tool: use.name, token, intent: r.intent }, output: body, ms: 0 });
-          steps.push({ kind: 'guard', name: 'write_guard', ok: false, ms: 0 });
+          await rec.step('guard', 'write_guard', { input: { tool: use.name, token, intent: r.intent }, output: body, ms: 0 }, false);
           toolCalls.push({ name: use.name, input: args, isError: true, blocked: true });
           results.push({ type: 'tool_result', tool_use_id: use.id, is_error: true, content: JSON.stringify(body) });
           continue;
         }
 
+        // --- A2A delegation to the Estimator
+        if (use.name === 'delegate_estimate' && deps.delegate) {
+          let out: { isError: boolean; body: unknown };
+          try {
+            const d = await deps.delegate(input.apiKey, {
+              description: String(args.job_description ?? ''),
+              ...(typeof args.customer_id === 'string' ? { customer_id: args.customer_id } : {}),
+              parent_run_id: runId,
+              ...(input.evalCaseId ? { eval_case_id: input.evalCaseId } : {}),
+            });
+            out = { isError: false, body: { ...d.estimate, a2a_task_id: d.taskId } };
+            await rec.step('a2a', 'estimator.estimate-remodel-job', { input: args, output: { task_id: d.taskId, estimator_run_id: d.estimatorRunId, subtotal: d.estimate.subtotal, lines: d.estimate.lines.length }, ms: Math.round(performance.now() - started) });
+          } catch (err) {
+            const reason = err instanceof DelegationFailed ? err.message : 'The Estimator agent did not respond.';
+            out = { isError: true, body: { error: { code: 'ESTIMATOR_FAILED', message: reason, retryable: !(err instanceof DelegationFailed) } } };
+            await rec.step('a2a', 'estimator.estimate-remodel-job', { input: args, error: { message: String(err), task_id: err instanceof DelegationFailed ? err.taskId : null }, ms: Math.round(performance.now() - started) });
+          }
+          toolCalls.push({ name: use.name, input: args, isError: out.isError });
+          results.push({ type: 'tool_result', tool_use_id: use.id, is_error: out.isError, content: renderToolResult(out.body) });
+          continue;
+        }
+
+        // --- MCP tools
         let out: { isError: boolean; body: unknown };
         try {
           out = await toolbox.call(use.name, args);
@@ -251,9 +240,7 @@ export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnRe
           out = { isError: true, body: { error: { code: 'TOOL_UNAVAILABLE', message: 'The data service did not respond.', retryable: true } } };
           log.warn({ tenantId, runId, tool: use.name, err: String(err) }, 'tool call failed at transport level');
         }
-        const ms = Math.round(performance.now() - started);
-        await recordStep('tool', use.name, { input: args, output: out.isError ? undefined : out.body, error: out.isError ? out.body : undefined, ms });
-        steps.push({ kind: 'tool', name: use.name, ok: !out.isError, ms });
+        await rec.step('tool', use.name, { input: args, output: out.isError ? undefined : out.body, error: out.isError ? out.body : undefined, ms: Math.round(performance.now() - started) });
         toolCalls.push({ name: use.name, input: args, isError: out.isError });
 
         if (use.name === 'create_estimate_draft' && !out.isError) {
@@ -271,8 +258,7 @@ export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnRe
       return await finish('rejected_spend_cap', `This account has reached its monthly AI budget ($${err.capUsd.toFixed(2)}). Questions will work again next month, or after the budget is raised.`, rt, null, issued);
     }
     log.error({ tenantId, runId, err: err instanceof Error ? { message: err.message, stack: err.stack } : String(err) }, 'agent turn failed');
-    await recordStep('error', 'turn_failed', { error: { message: err instanceof Error ? err.message : String(err) }, ms: 0 }).catch(() => {});
-    steps.push({ kind: 'error', name: 'turn_failed', ok: false, ms: 0 });
+    await rec.step('error', 'turn_failed', { error: { message: err instanceof Error ? err.message : String(err) }, ms: 0 }).catch(() => {});
     return await finish('failed', 'Something went wrong while answering. The problem has been logged; please try again.', rt, null, issued);
   } finally {
     await toolbox?.close().catch(() => {});

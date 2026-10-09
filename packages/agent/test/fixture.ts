@@ -96,7 +96,11 @@ export class FakeLlm implements LlmClient {
     if (!next) throw new Error('FakeLlm: no scripted response left');
     const last = params.messages[params.messages.length - 1]!;
     const lastToolResults = Array.isArray(last.content)
-      ? last.content.filter((b: any) => b.type === 'tool_result').map((b: any) => ({ isError: Boolean(b.is_error), body: JSON.parse(String(b.content).replace(/\.\.\. \[truncated.*$/, '')) }))
+      ? last.content.filter((b: any) => b.type === 'tool_result').map((b: any) => {
+          const parsed = JSON.parse(String(b.content));
+          if (parsed?.result_truncated) throw new Error(`FakeLlm: tool result truncated (${parsed.note}); the test asked for too much`);
+          return { isError: Boolean(b.is_error), body: parsed };
+        })
       : [];
     return next(params, { lastToolResults });
   }

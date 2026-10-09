@@ -2,6 +2,20 @@
 
 Short records of choices that a reviewer might question. Newest first.
 
+## D9. The Estimator is read-only and grounded by code, not by prompt
+**Day 5.** An estimating agent that invents a line item or a price produces a
+plausible, wrong number that a contractor might send to a customer. So the
+guarantees are structural: the Estimator's tool list contains only
+`find_customer` and `get_customer_job_history` plus a local `submit_estimate`;
+its submission is checked against the set of jobs, items and prices it actually
+retrieved in that run; arithmetic is done in code. Writing stays with the
+Office Manager behind the two-gate write guard (D8).
+
+Also found while testing: tool results over the size cap were cut mid-string,
+handing the model invalid JSON. Oversized results are now wrapped as valid
+JSON marked `result_truncated`, and long line descriptions are shortened in
+job history so 20 comparable jobs fit.
+
 ## D8. Write guard in the agent runtime, not only in the tool
 **Day 4.** The MCP server already refuses to write without a preview and a
 token. But the server cannot know whether a *human* saw the preview: a model

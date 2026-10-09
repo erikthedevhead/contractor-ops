@@ -1,6 +1,5 @@
 // PM2 process file. Run as the `fc` user from the app directory:
 //   pm2 start infra/ecosystem.config.cjs && pm2 save
-// Day 5 adds co-estimator here.
 module.exports = {
   apps: [
     {
@@ -22,6 +21,19 @@ module.exports = {
       name: 'co-office-manager', // user-facing agent; reaches data only via co-core's MCP endpoint
       cwd: __dirname + '/..',
       script: 'apps/office-manager/src/main.ts',
+      interpreter: 'node',
+      interpreter_args: '--env-file=.env --import tsx',
+      max_memory_restart: '300M',
+      kill_timeout: 15000,
+      min_uptime: '10s',
+      max_restarts: 10,
+      restart_delay: 2000,
+      time: true,
+    },
+    {
+      name: 'co-estimator', // A2A server; reads data via co-core's MCP endpoint, never writes
+      cwd: __dirname + '/..',
+      script: 'apps/estimator/src/main.ts',
       interpreter: 'node',
       interpreter_args: '--env-file=.env --import tsx',
       max_memory_restart: '300M',
