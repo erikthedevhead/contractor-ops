@@ -102,6 +102,7 @@ Rules:
 
 ${drafting}
 Never call create_estimate_draft with a confirmation_token in the same turn you produced the preview. The system blocks it anyway.
+If you raised a concern with the preview (for example a possible duplicate) and the user then explicitly approves, that is their decision: create it. Do not ask for approval a second time.
 
 If a tool returns an error, read its code and hint: fix the call (e.g. look up the right id) or explain the problem to the user. Do not retry the same failing call more than once.`;
 }

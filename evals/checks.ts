@@ -22,13 +22,29 @@ export type FailureMode =
   | 'recovery_failed'
   | 'agent_error';
 
-/** Dollar-ish amounts in text: "$25,898.50", "25898.50", "$7,054". */
+const MONTHS = 'Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?';
+/** Remove dates so their digits are never read as amounts (first eval run: "2026-04-15" -> 2026, 4, 15). */
+export function stripDates(text: string): string {
+  return text
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')
+    .replace(new RegExp(`\\b(?:${MONTHS})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?`, 'gi'), ' ')
+    .replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, ' ');
+}
+
+/** Numbers that look like amounts: "$25,898.50", "25898.50", "$7,054". Dates are stripped first. */
 export function amountsIn(text: string): number[] {
   const out: number[] = [];
-  for (const m of text.matchAll(/\$?\s?(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?/g)) {
+  for (const m of stripDates(text).matchAll(/\$?\s?(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?/g)) {
     const n = Number(`${m[1]!.replace(/,/g, '')}${m[2] ?? ''}`);
     if (Number.isFinite(n)) out.push(n);
   }
+  return out;
+}
+
+/** Only "$"-prefixed amounts: what a reply claims as money (ids, counts and years excluded). */
+export function dollarAmounts(text: string): number[] {
+  const out: number[] = [];
+  for (const m of stripDates(text).matchAll(/\$\s?(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?/g)) out.push(Number(`${m[1]!.replace(/,/g, '')}${m[2] ?? ''}`));
   return out;
 }
 

@@ -18,3 +18,15 @@ describe('eval checks', () => {
     expect(toolsMatch([{ name: 'get_ar_aging', args: { overdue_more_than_days: 30 } }], turns)).toBe(false);
   });
 });
+
+describe('number extraction ignores dates and ids (first eval run regressions)', async () => {
+  const { amountsIn, dollarAmounts } = await import('../checks');
+  it('dates are not amounts', () => {
+    expect(amountsIn('open balance of $0.00, last activity on 2026-04-15')).toEqual([0]);
+    expect(amountsIn('$0.00 invoiced in 2023 (January 1 to December 31)')).toEqual([0, 2023]);
+    expect(dollarAmounts('$0.00 invoiced in 2023 (January 1 to December 31)')).toEqual([0]);
+  });
+  it('ids are not money', () => {
+    expect(dollarAmounts("She's in QuickBooks as customer 1031 since April 15, 2025.")).toEqual([]);
+  });
+});

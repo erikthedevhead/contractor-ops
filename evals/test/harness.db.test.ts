@@ -11,7 +11,7 @@ import { setupEvalWorld, type EvalWorld } from '../world';
 
 let world: EvalWorld;
 beforeAll(async () => {
-  world = await setupEvalWorld({ databaseUrl: process.env.DATABASE_URL!, ownerUrl: process.env.MIGRATION_DATABASE_URL!, label: 'harness-test' });
+  world = await setupEvalWorld({ databaseUrl: process.env.DATABASE_URL!, ownerUrl: process.env.MIGRATION_DATABASE_URL!, label: 'harness-test', deleteOnClose: true });
 }, 90_000);
 afterAll(async () => world.close());
 
@@ -53,6 +53,26 @@ describe('eval harness', () => {
   it('fault case without a model: duplicate webhooks are deduped and the mirror is current', async () => {
     const [r] = await runEval({ world, llm: new FakeLlm(), cases: pick('F03-duplicate-webhooks'), iterations: 1, concurrency: 1 });
     expect(r).toMatchObject({ pass: true, detail: expect.stringMatching(/1 accepted/) });
+  });
+
+  it('fresh customers are unique per case and isolated from seed data', async () => {
+    const names: string[] = [];
+    const probe = {
+      id: 'X-probe', category: 'write_safety' as const, world: 'write' as const, description: 'probe',
+      async run(ctx: any) {
+        names.push(await ctx.freshCustomer(), await ctx.freshCustomer({ withPendingEstimate: 'Bathroom remodel' }));
+        return { pass: true, detail: names.join(', ') };
+      },
+    };
+    await runEval({ world, llm: new FakeLlm(), cases: [probe], iterations: 1, concurrency: 1 });
+    expect(new Set(names).size).toBe(2);
+    const { withTenant } = await import('@co/db');
+    const rows = await withTenant(world.db, world.write.tenantId, (tx) =>
+      tx.selectFrom('qbo_customers').select(['display_name', 'qbo_id']).where('display_name', 'in', names).execute());
+    expect(rows).toHaveLength(2);
+    const est = await withTenant(world.db, world.write.tenantId, (tx) =>
+      tx.selectFrom('qbo_estimates').select('txn_status').where('customer_qbo_id', '=', rows.find((r) => r.display_name === names[1])!.qbo_id).execute());
+    expect(est).toEqual([{ txn_status: 'Pending' }]);
   });
 
   it('nothing was written to the read-only tenant', () => {

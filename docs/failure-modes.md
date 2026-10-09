@@ -21,6 +21,17 @@ happened, why it mattered, the fix, and the test that now guards it.
 | 10 | **Secret fragment echoed** by env validation | Misformatted `TOKEN_ENC_KEYS` in production `.env` | Partial key in log files | Validator never quotes values | `env.unit.test.ts` |
 | 11 | **Config error crash-looped** (164 restarts, 50% CPU) on a shared box | Same incident | Starved the co-hosted app | PM2 `min_uptime` / `max_restarts` | ecosystem config |
 
+## Found by the first eval run (and how it was triaged)
+
+The first full run scored 86.7% (91/105). Triage before trusting the number:
+
+| Failures | Cause | Verdict | Fix |
+|---|---|---|---|
+| L04 x3, R01 x3, R05 x2 | Replies were correct; the checker read dates ("2026-04-15") and a customer id (1031) as dollar amounts | Harness bug | Strip dates; hallucination checks count only `$` amounts; regression tests |
+| F04 x3 | After 5 injected 503s the agent retried the write within the approved turn and succeeded, creating exactly one estimate (same `requestid`) | Wrong expectation: the behavior was correct and safe | Outage now outlasts every retry in the turn; the outage is then cleared and the user retries |
+| W02 #3, F01 #1, F02 #2 | All write cases reused one customer, so earlier cases' estimates made the agent warn about duplicates; after the warning, a plain "yes" sometimes got a second confirmation request instead of a write | Two issues: cases not independent (harness) and double-asking after a warning (agent) | Fresh customer per case iteration; prompt rule "don't ask twice"; new case W05 measures approve-after-warning directly |
+| (forensics) | The harness deleted eval tenants on exit, cascading away the traces needed to diagnose the above | Harness bug | Traces kept until the next run; `pnpm eval:trace <case>` prints them |
+
 ## Measured by the eval suite
 
 See `docs/eval-report.md`. Failure modes are categorized as:

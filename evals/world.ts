@@ -57,9 +57,13 @@ async function listen(handler: Parameters<typeof createServer>[1] | ((base: stri
   return { server, base };
 }
 
-export async function setupEvalWorld(opts: { databaseUrl: string; ownerUrl: string; capUsd?: number; label?: string }): Promise<EvalWorld> {
+export async function setupEvalWorld(opts: { databaseUrl: string; ownerUrl: string; capUsd?: number; label?: string; deleteOnClose?: boolean }): Promise<EvalWorld> {
   const db = createDb(opts.databaseUrl, { max: 10 });
   const owner = createDb(opts.ownerUrl, { max: 2 });
+  // Keep the previous run's tenants (and so its agent traces) until a new run
+  // starts. First eval run: deleting on close cascaded away the traces needed
+  // to diagnose its failures.
+  if (!opts.deleteOnClose) await db.deleteFrom('tenants').where('name', 'like', 'eval-%').where('name', 'not like', '%harness-test%').execute();
   const plan = buildPlan(ANCHOR);
   const app = { environment: 'sandbox' as const, clientId: 'eval-client-0000', clientSecret: 'eval-secret-0000', redirectUri: 'http://eval/cb' };
   const fakes = new Map<string, FakeQbo>();
@@ -116,7 +120,7 @@ export async function setupEvalWorld(opts: { databaseUrl: string; ownerUrl: stri
     async close() {
       core.server.close();
       est.server.close();
-      for (const t of [read, write]) await db.deleteFrom('tenants').where('id', '=', t.tenantId).execute().catch(() => {});
+      if (opts.deleteOnClose) for (const t of [read, write]) await db.deleteFrom('tenants').where('id', '=', t.tenantId).execute().catch(() => {});
       await db.destroy();
       await owner.destroy();
     },

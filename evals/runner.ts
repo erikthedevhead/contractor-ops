@@ -1,6 +1,7 @@
 import { sql } from 'kysely';
 import { runTurn, type LlmClient, type TurnResult } from '@co/agent';
 import { withTenant } from '@co/db';
+import { applyEntity } from '@co/qbo';
 import type { FailureMode } from './checks';
 import type { CaseContext, Category, EvalCase } from './cases';
 import type { EvalWorld } from './world';
@@ -70,6 +71,19 @@ async function runOne(opts: RunOptions, c: EvalCase, iteration: number): Promise
       return t;
     },
     estimatesCreated: () => tenant.fake.all('Estimate').length,
+    async freshCustomer(o = {}) {
+      const name = nextName();
+      const c = tenant.fake.insert('Customer', { DisplayName: name, ...(o.companyName ? { CompanyName: o.companyName } : {}), Active: true });
+      await withTenant(world.db, tenant.tenantId, (tx) => applyEntity(tx, tenant.tenantId, 'Customer', c));
+      if (o.withPendingEstimate) {
+        const e = tenant.fake.insert('Estimate', {
+          CustomerRef: { value: c.Id }, TxnDate: '2026-10-01', ExpirationDate: '2026-10-31', TxnStatus: 'Pending', TotalAmt: 7838,
+          CustomerMemo: { value: o.withPendingEstimate }, Line: [{ Id: '1', Amount: 7838, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { Qty: 1, UnitPrice: 7838 } }],
+        });
+        await withTenant(world.db, tenant.tenantId, (tx) => applyEntity(tx, tenant.tenantId, 'Estimate', e));
+      }
+      return name;
+    },
     async toolOutput(runId, tool) {
       const r = await withTenant(world.db, tenant.tenantId, (tx) =>
         tx.selectFrom('agent_steps').select('output').where('run_id', '=', runId).where('kind', '=', 'tool').where('name', '=', tool)
@@ -108,6 +122,16 @@ async function runOne(opts: RunOptions, c: EvalCase, iteration: number): Promise
     runIds,
     toolCalls,
   };
+}
+
+// Realistic, unique names for per-case customers (no history, no lookalikes in the seed).
+const FIRST = ['Avery', 'Jordan', 'Morgan', 'Riley', 'Quinn', 'Casey', 'Dana', 'Elliot', 'Harper', 'Rowan'];
+const LAST = ['Fairbanks', 'Whitcomb', 'Ashford', 'Kettering', 'Lindgren', 'Pembrook', 'Castellano', 'Merriweather', 'Okonkwo', 'Vasquez-Hale'];
+let nameSeq = 0;
+function nextName(): string {
+  const i = nameSeq++;
+  const base = `${FIRST[i % FIRST.length]} ${LAST[Math.floor(i / FIRST.length) % LAST.length]}`;
+  return i < FIRST.length * LAST.length ? base : `${base} ${Math.floor(i / (FIRST.length * LAST.length)) + 1}`;
 }
 
 /** Every expected tool was called at least once with (at least) the expected args. */

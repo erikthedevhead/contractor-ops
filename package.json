@@ -28,7 +28,8 @@
     "chat": "tsx scripts/chat.ts",
     "dev:agent": "tsx watch --env-file=.env apps/office-manager/src/main.ts",
     "dev:estimator": "tsx watch --env-file=.env apps/estimator/src/main.ts",
-    "eval": "tsx --env-file=.env evals/cli.ts"
+    "eval": "tsx --env-file=.env evals/cli.ts",
+    "eval:trace": "tsx --env-file=.env evals/trace.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
