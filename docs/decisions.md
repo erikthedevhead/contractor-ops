@@ -2,6 +2,23 @@
 
 Short records of choices that a reviewer might question. Newest first.
 
+## D10. Evals in a hermetic world with real models
+**Day 6.** Ground truth that depends on live sandbox data drifts every time
+someone records a payment, and aging answers drift every day. So evals seed
+two fresh tenants from the same plan into in-process fake QuickBooks, pin
+"today" to the seed anchor (`tenants.frozen_today`, NULL for real tenants),
+and run the real models, MCP server, A2A Estimator and agent loop against
+them. Write cases get a fresh customer each, so cases can't influence each
+other. Traces from the last run are kept for `pnpm eval:trace`.
+
+## D11. The web chat renders agent output defensively
+**Day 7.** Agent replies contain text from QuickBooks (customer names, memos)
+that outsiders can influence. The page HTML-escapes everything before applying
+a minimal Markdown subset, runs under a nonce-based CSP with no third-party
+scripts and `connect-src 'self'`, and keeps the API key in `sessionStorage`.
+The renderer is embedded via `Function.prototype.toString()`, so the
+XSS-tested function is the one that runs.
+
 ## D9. The Estimator is read-only and grounded by code, not by prompt
 **Day 5.** An estimating agent that invents a line item or a price produces a
 plausible, wrong number that a contractor might send to a customer. So the

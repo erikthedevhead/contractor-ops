@@ -32,6 +32,10 @@ export function createApp(deps: AppDeps) {
     res.json({ ok: true });
   });
 
+  // The public entry point is the Office Manager's web chat (nginx /agent/).
+  app.get('/', (_req, res) => res.redirect(302, '/agent/'));
+  app.get('/agent', (_req, res) => res.redirect(301, '/agent/'));
+
   if (deps.mcp) {
     const { auth, handle } = deps.mcp;
     app.all('/mcp', auth, (req, res) => handle(req, res));

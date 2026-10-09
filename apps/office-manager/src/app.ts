@@ -3,7 +3,9 @@ import * as z from 'zod';
 import { runTurn, type AgentDeps } from '@co/agent';
 import { resolveApiKey } from '@co/mcp';
 import { logger as baseLogger, type Logger } from '@co/shared';
+import { randomBytes } from 'node:crypto';
 import { usageReport } from './usage';
+import { chatPage } from './web';
 
 export interface OfficeManagerAppDeps extends AgentDeps {
   log?: Logger;
@@ -25,6 +27,31 @@ export function createOfficeManagerApp(deps: OfficeManagerAppDeps) {
   app.use(express.json({ limit: '32kb' }));
 
   app.get('/health', (_req, res) => void res.json({ ok: true }));
+
+  // The web chat. Strict CSP with a per-response nonce: no inline handlers, no
+  // third-party scripts, and the page can only talk to this origin.
+  app.get('/', (_req, res) => {
+    const nonce = randomBytes(16).toString('base64');
+    res
+      .set({
+        'Content-Security-Policy': [
+          "default-src 'none'",
+          `script-src 'nonce-${nonce}'`,
+          `style-src 'nonce-${nonce}' https://fonts.googleapis.com`,
+          'font-src https://fonts.gstatic.com',
+          "connect-src 'self'",
+          "img-src 'self' data:",
+          "base-uri 'none'",
+          "form-action 'none'",
+          "frame-ancestors 'none'",
+        ].join('; '),
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'no-referrer',
+        'Cache-Control': 'no-store',
+      })
+      .type('html')
+      .send(chatPage(nonce));
+  });
 
   const auth = async (req: Authed, res: Response, next: NextFunction) => {
     const h = req.get('authorization') ?? '';
@@ -61,6 +88,7 @@ export function createOfficeManagerApp(deps: OfficeManagerAppDeps) {
       intent: r.intent,
       model: r.model,
       cost_usd: r.costUsd.toFixed(6),
+      wrote: r.toolCalls.some((t) => t.name === 'create_estimate_draft' && typeof t.input.confirmation_token === 'string' && !t.isError && !t.blocked),
       steps: r.steps.map((s) => `${s.kind}:${s.name}${s.ok ? '' : ' (error)'}`),
     });
   });

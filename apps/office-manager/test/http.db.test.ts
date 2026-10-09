@@ -27,6 +27,21 @@ const chat = (body: unknown, key = w.writeKey) =>
   fetch(`${base}/chat`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
 
 describe('office manager HTTP API', () => {
+  it('serves the web chat with a strict, nonce-based CSP', async () => {
+    const res = await fetch(`${base}/`);
+    expect(res.status).toBe(200);
+    const csp = res.headers.get('content-security-policy')!;
+    const nonce = /script-src 'nonce-([^']+)'/.exec(csp)![1]!;
+    const html = await res.text();
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("connect-src 'self'");
+    expect(html).toContain(`<script nonce="${nonce}">`);
+    expect(html).not.toMatch(/ on(click|load|error)=/); // no inline handlers
+    expect(html).toContain('const renderMarkdown = ');
+    const again = await fetch(`${base}/`);
+    expect(again.headers.get('content-security-policy')).not.toBe(csp); // fresh nonce each time
+  });
+
   it('rejects a missing or invalid key', async () => {
     expect((await chat({ message: 'hi' }, 'nope')).status).toBe(401);
   });

@@ -1,198 +1,192 @@
 # Contractor Ops Agent
 
-An MCP server and agent system that lets a contractor ask questions and take
-actions against their QuickBooks Online data. Portfolio project; full write-up,
-architecture diagram and eval results land at the end of the week.
+A contractor asks questions about their real QuickBooks books in plain English,
+and drafts estimates from their own past jobs, through two cooperating AI
+agents. Built in a week as a production-minded portfolio project.
 
-## Status
+**Live demo:** https://contractor-ops.houghworks.com (API key on request) · **Demo video:** _link_
 
-| Day | Scope | State |
-|---|---|---|
-| 1 | Scaffold, schema + RLS, QuickBooks OAuth + encrypted token storage, seeder, initial sync | done |
-| 2 | Webhooks (CloudEvents), job queue, idempotency, retries, dead-letter, CDC reconciliation | done |
-| 3 | MCP server (SDK v2), tenant-scoped API keys, two-step write | done |
-| 4 | Office Manager agent loop, cost metering, spend caps | done |
-| 5 | Estimator agent over A2A | done |
-| 6 | Evals + fault injection | harness done; results in docs/eval-report.md |
-| 7 | Deploy, docs, demo | |
+> **"Which customers owe me more than 60 days?"** One tool call, answered from a
+> local mirror of QuickBooks, with the 60-vs-61-day boundary handled exactly. About $0.0005.
+>
+> **"Draft an estimate for a bathroom remodel for Mark Johnson."** The Office Manager
+> delegates to an Estimator agent over A2A. The Estimator sizes the job from comparable past
+> jobs, with its assumptions stated. The Office Manager shows a preview and writes to
+> QuickBooks only after an explicit "yes", exactly once. About $0.09 across both agents.
 
-## What Day 1 proves
+## Architecture
 
-- **OAuth done properly.** Signed, expiring connect links; single-use OAuth
-  state; tokens encrypted at rest with AES-256-GCM, key versioning, and AAD that
-  binds each ciphertext to its tenant, realm and column.
-- **Refresh-token rotation without races.** Refresh happens under a row lock;
-  N concurrent callers produce exactly one refresh. `invalid_grant` flips the
-  connection to `needs_reauth` and stops hammering Intuit; transient failures
-  leave tokens untouched. (Tested.)
-- **Tenant isolation in the database.** RLS with `FORCE`, a non-owner app role,
-  transaction-local tenant context. Tests prove cross-tenant reads, writes,
-  updates and deletes all fail.
-- **Retries that can't create duplicates.** Full-jitter backoff on 429/5xx/network,
-  `Retry-After` honored, one token refresh on 401, and every POST must carry a
-  `requestid` that is reused across retries.
-- **Order-independent sync.** Mirror upserts only apply a higher `SyncToken`, so
-  duplicate and out-of-order updates are no-ops.
-- **Integration cost visibility.** Every QuickBooks call attempt is metered per
-  tenant, flagged when it counts toward Intuit's CorePlus quota.
-
-## What Day 2 proves
-
-- **Webhooks that can't lose or double-apply events.** Signature verified over
-  raw bytes; raw delivery persisted first; each event deduped on its CloudEvents
-  id and its processing job enqueued in the same transaction; 200 returned
-  without touching QuickBooks. Duplicate, out-of-order and late events all
-  converge on the same row. (Tested end to end over HTTP.)
-- **A job queue with real failure semantics.** `FOR UPDATE SKIP LOCKED` claims,
-  exponential backoff with jitter, dead-letter after max attempts or on
-  non-retryable errors, replay from the CLI, and recovery of jobs abandoned by
-  a crashed worker. The tests caught a real Postgres gotcha along the way
-  (an un-materialized `IN (SELECT ... LIMIT n)` can lock more than n rows).
-- **Built against the real thing, not the docs.** The live sandbox sent Intuit's
-  legacy payload format despite the documented retirement, and payments don't
-  notify about the invoices they change. Both are handled; see D6 in
-  `docs/decisions.md`. The first rejected delivery was recovered by replaying it
-  from the stored raw body.
-- **A nightly safety net.** CDC reconcile catches missed creates, updates and
-  deletes; falls back to a paged query when an entity hits CDC's 1,000-object
-  cap; schedules a full re-sync when the gap exceeds CDC's 30-day window.
-
-## What Day 3 proves
-
-- **MCP on the current spec.** TypeScript SDK v2, protocol 2026-07-28,
-  stateless: one server instance per request, built for exactly one
-  authenticated tenant. Six tools, five read-only, all answered from the
-  Postgres mirror (zero QuickBooks calls, zero quota).
-- **No tenant parameter exists.** The tenant comes from the API key; no tool
-  schema mentions a tenant, so no argument (or prompt injection) can reach
-  another tenant's data. RLS enforces it again underneath. Tested.
-- **Keys handled like credentials.** 256-bit keys, stored as SHA-256 with a
-  display prefix; the app role cannot read the keys table at all and resolves
-  keys only through a `SECURITY DEFINER` function. Scopes: `read` and
-  `write:estimate`.
-- **A write that can't happen by accident or twice.** `create_estimate_draft`
-  previews first and writes only with a single-use, tenant-bound, 15-minute
-  confirmation token. The exact QuickBooks body is fixed and hash-checked at
-  preview time; every retry reuses one `requestid`; a replayed token returns the
-  original estimate. Tested through outages, lost responses and tampering.
-- **Errors an agent can act on.** Every failure is `{code, message, retryable,
-  hint}`; unexpected errors are logged server-side and surface only as
-  `INTERNAL`.
-
-## What Day 4 proves
-
-- **A custom agent loop, fully inspectable.** No framework. Each turn is
-  `route -> [model -> tools]* -> answer`; every model call, tool call and guard
-  decision is a row in `agent_steps`, so any answer can be traced to the exact
-  tool results it was built from.
-- **MCP is the agent's only path to data.** The agent is an MCP client using the
-  caller's API key, so it inherits the caller's tenant and scopes: a read-only
-  key produces an agent that cannot write.
-- **Model routing.** A Haiku 5.5 classification call (structured JSON output)
-  picks the model per turn: Haiku 5.5 for lookups, Sonnet 5.5 for analysis and
-  estimating. Routing fails closed: if the router errors, the turn runs as a
-  plain lookup that can never unlock a write.
-- **Per-tenant cost tracking and a hard cap.** Every call is priced from a
-  `model_prices` table (input, output, cache read/write) and logged to
-  `llm_calls`. Each call reserves its worst-case cost before running and settles
-  afterwards, so concurrent requests can't overshoot the monthly cap (tested
-  with 20 concurrent reservations against a cap that fits 5). `GET /agent/usage`
-  shows the month's spend by model, runs, and QuickBooks calls.
-- **The agent cannot write without the user's say-so.** Beyond the MCP server's
-  two-step write, the runtime blocks any confirmation unless the token was shown
-  to the user in an earlier turn and the current message is an explicit
-  approval. A model that "helpfully" confirms its own draft is stopped and the
-  attempt is recorded as a guard step. Tested across four turns.
-
-## What Day 5 proves
-
-- **MCP for agent-to-tool, A2A for agent-to-agent.** The Estimator is a separate
-  service speaking A2A v1.0 through the official `@a2a-js/sdk`: Agent Card at
-  `/.well-known/agent-card.json` (one skill, Bearer auth), JSON-RPC transport,
-  tasks persisted in Postgres. The Office Manager discovers it from the card and
-  delegates every estimating request to it; both agents reach data only via MCP.
-- **Identity propagates across agents.** The caller's API key travels
-  user -> Office Manager -> (A2A) -> Estimator -> (MCP) -> data, so every hop acts
-  for the same tenant with the same scopes. A2A tasks are owner-scoped per
-  tenant (tested: tenant B cannot read tenant A's task).
-- **An estimator that can't make things up.** It is never offered a write tool,
-  and its submission is validated in code: every item id and unit price must
-  appear in a comparable job it actually retrieved, and every comparable it cites
-  must be one it saw. Invented items or prices are bounced back for correction;
-  after three bad submissions the task fails with a reason. Line amounts and the
-  subtotal are computed in code, never taken from the model.
-- **Cost of a request across agents.** The Estimator meters its own run, linked
-  by `parent_run_id`; one query gives the total cost of "draft an estimate"
-  across both agents.
-
-## What Day 6 proves
-
-- **Evals with real models and exact ground truth.** 35 cases across lookups,
-  calculations, refusals, ambiguity, estimate quality, write safety and fault
-  injection, each run 3x. The data is a hermetic seeded world (fake
-  QuickBooks, "today" pinned), so ground truth is exact; the models, MCP server,
-  A2A Estimator and agent loop are the real ones. Ground truth is derived from
-  the seed plan and pinned to hand-verified figures by a unit test.
-- **Reported the way you'd want to read it:** accuracy, flaky cases (mixed
-  outcomes across iterations), tool-call correctness, cost per run across both
-  agents, and categorized failure modes (`docs/eval-report.md`).
-- **Fault injection through the real code paths:** QuickBooks 429 storms on the
-  approved write, an access token revoked mid-task (real refresh through a fake
-  token endpoint), duplicate concurrent webhook deliveries, and an outage past
-  all retries followed by a user-requested retry. Each must end with exactly
-  one write or none.
-- **A safety invariant checked on every run:** the read-only tenant must see
-  zero QuickBooks writes.
-- `docs/failure-modes.md` lists the failures found while building against the
-  real sandbox and models, with the fix and the test that now guards each.
-
-## Operating it
-
-```bash
-pnpm dev                      # API + worker locally
-pnpm reconcile <tenant-id>    # run CDC reconcile now
-pnpm dlq list                 # dead-lettered jobs
-pnpm dlq replay <id>          # requeue one
-pnpm webhooks:reingest <id>   # replay a stored delivery through the current parser
-pnpm eval                     # full eval suite, real models, local DB (~$2-4)
-pnpm eval --cases L0,W0 --iterations 1   # a subset
-bash infra/deploy.sh          # deploy to the droplet
-pnpm dev:agent                # Office Manager on :3200 (needs pnpm dev running)
-pnpm dev:estimator            # Estimator (A2A) on :3300
-MCP_API_KEY=... pnpm chat     # talk to it
-pnpm api-key create <tenant> [--write]   # MCP key (shown once)
-MCP_API_KEY=... pnpm mcp:call get_ar_aging '{"overdue_more_than_days":60}'
+```mermaid
+flowchart LR
+  user["Contractor<br/>web chat or CLI"]
+  qbo[("QuickBooks Online")]
+  llm[("Anthropic API<br/>Haiku 5.5 / Sonnet 5.5")]
+  subgraph droplet["DigitalOcean droplet (nginx + PM2)"]
+    om["co-office-manager<br/>Office Manager agent"]
+    est["co-estimator<br/>Estimator agent (A2A)"]
+    subgraph core["co-core"]
+      mcp["MCP server"]
+      api["OAuth + webhooks"]
+      worker["Job worker + CDC"]
+    end
+    pg[("Postgres<br/>RLS per tenant")]
+  end
+  user -- "HTTPS + API key" --> om
+  om -- "MCP" --> mcp
+  om -- "A2A" --> est
+  est -- "MCP (read-only)" --> mcp
+  om --> llm
+  est --> llm
+  mcp --> pg
+  api --> pg
+  worker --> pg
+  qbo -- "signed webhooks" --> api
+  worker -- "REST" --> qbo
+  mcp -- "guarded write" --> qbo
 ```
 
-## Local setup
+More diagrams (estimate sequence, sync pipeline, security model): [`docs/architecture.md`](docs/architecture.md).
+
+## What this proves
+
+| Requirement | How it's met here | Evidence |
+|---|---|---|
+| **Production AI agents with tool calling** | Two agents on a custom, inspectable loop (no framework). Every model call, tool call, A2A delegation and guard decision is a row in `agent_steps`. Model routing: Haiku 5.5 for classification and lookups, Sonnet 5.5 for analysis and estimating. | `packages/agent`, live traces in the web chat |
+| **MCP** | MCP server on the 2026-07-28 spec (TypeScript SDK v2, stateless, StreamableHTTP): six tools, typed errors with codes and hints, a two-step guarded write. | `apps/mcp`, 30+ tests driving a real MCP client over HTTP |
+| **A2A** | The Estimator is an A2A v1.0 server (official `@a2a-js/sdk`): Agent Card, Bearer auth, JSON-RPC, tasks in Postgres. The Office Manager discovers it from the card and delegates estimating to it. | `apps/estimator`, cross-agent cost query |
+| **OAuth** | Signed connect links, single-use state, AES-256-GCM token storage bound to tenant and realm, refresh under a row lock so concurrent callers refresh once; `invalid_grant` marks the connection for re-auth. | `tokens.db.test.ts` |
+| **Webhooks: retries, duplicate prevention, partial-failure recovery** | Signature verified on raw bytes; raw deliveries stored before parsing; events deduped on id and enqueued in the same transaction; version-guarded upserts make duplicates and reordering harmless; jittered backoff, dead letters with replay, stale-lock reaping; nightly CDC reconcile with fallbacks for CDC's 1,000-object and 30-day limits. | `webhook-flow.db.test.ts`, live webhook recovery (see failure modes) |
+| **AI evals** | 36 cases × 3 iterations against real models in a hermetic seeded world: lookups, calculations, refusals, ambiguity, estimate quality, write safety, fault injection. Accuracy, variance, tool-call correctness, cost per case, categorized failure modes. | [`docs/eval-report.md`](docs/eval-report.md) |
+| **Per-customer cost tracking** | Every model call priced from a `model_prices` table and logged per tenant; every QuickBooks call metered, flagged when it counts toward Intuit's CorePlus quota. A hard monthly cap per tenant uses reserve-then-settle, so concurrent requests can't overshoot. | `GET /agent/usage`, spend-cap concurrency test |
+| **Auth and data protection** | Postgres RLS with `FORCE` and a non-owner app role; no tool takes a tenant id; hashed API keys reachable only via a `SECURITY DEFINER` resolver; caller scopes propagate across agents; strict CSP on the web chat. | `rls.db.test.ts`, tenant-isolation tests on MCP and A2A |
+
+## Evals
+
+Latest run: **108/108 (100%)**, 0 flaky cases, 100% tool-call correctness,
+**zero writes to the read-only tenant**, $2.79 for the whole run.
+Full report: [`docs/eval-report.md`](docs/eval-report.md).
+
+| Category | Cases | What it checks |
+|---|---|---|
+| Lookup | 10 | balances, the 60/61-day boundary, Q3 revenue, oldest unpaid invoice |
+| Calculation | 6 | percent of receivables over 60 days, biggest debtor incl. not-yet-due, buckets |
+| Refusal | 5 | no history, unknown customer, no cost data for margins, out of scope |
+| Ambiguity | 2 | two "Johnson" customers: must ask, for a balance and for an estimate |
+| Estimate quality | 4 | required line items present; subtotal within tolerance of comparable jobs |
+| Write safety | 5 | "save it, don't ask", approval writes once, questions aren't approval, instructions planted in QuickBooks data, approve after a duplicate warning |
+| Fault injection | 4 | 429 storm on the write, access token revoked mid-task, duplicate concurrent webhooks, outage past all retries |
+
+**How it got to 100%.** The first run scored 86.7%. Triage showed 8 failures
+were my checker reading dates and ids as dollar amounts, 3 came from a fault
+case that didn't really simulate an outage, and 3 came from write cases
+sharing a customer, which exposed one real agent behavior: asking for approval
+twice after a duplicate warning. Checks were made more precise and the fault
+case harder; no case was loosened. The agent fix was one prompt rule, and a new
+case measures it. Details in [`docs/failure-modes.md`](docs/failure-modes.md).
+
+**What the number doesn't claim.** 36 cases written by the builder is a small,
+friendly suite; 3 iterations can't rule out rare failures; the data is
+synthetic by design (that is what makes the ground truth exact).
+
+## Built against the real thing
+
+Eleven failures found while building against the live QuickBooks sandbox and
+real models, each with its fix and the test that now guards it, are in
+[`docs/failure-modes.md`](docs/failure-modes.md). Highlights:
+
+- Intuit sent the **legacy webhook format** despite the docs; the first live payment was
+  rejected and later **recovered by replaying the stored raw delivery**.
+- **Payments don't notify about the invoices they change**; the processor now refreshes them.
+- A Postgres job claim **locked more rows than requested** (`IN (SELECT ... LIMIT n)`); fixed
+  with a materialized CTE.
+- A typo'd customer id made a tool answer **"owes $0.00"**; ids are now verified.
+- **Silent truncation** let the agent describe 10 of 16 jobs as all of them; results now say when they're partial.
+
+## Cost
+
+Measured in production: a lookup costs about **$0.0005**; drafting an estimate
+costs about **$0.09** (Office Manager $0.03 + Estimator $0.07, linked by
+`parent_run_id`). A contractor asking 300 questions and drafting 30 estimates a
+month costs roughly **$3** in model spend, under the default $25 cap. A full
+mirror sync of the sample company took 5 QuickBooks API calls; every question
+after that is answered from Postgres at zero API quota.
+
+## Production vs. prototype
+
+**Hardened**
+
+- Webhook ingestion, idempotency, retries, dead letters, replay, nightly reconciliation
+- Token storage and rotation; tenant isolation in the database
+- The write path: preview, single-use tenant-bound token, fixed `requestid`, agent-side approval gate
+- Spend caps under concurrency; per-call metering
+- Startup probes, PM2 restart limits, secret-safe config validation
+
+**Prototype**
+
+- MCP auth is per-tenant API keys, not the MCP spec's OAuth (fine for first-party agents; third-party clients would need OAuth, a one-middleware change; see decision D7).
+- One droplet, one process per service, in-process rate limiting; no horizontal scaling.
+- QuickBooks production keys not obtained (Intuit's app review); runs on the sandbox.
+- The eval suite is small and builder-written; estimate quality is rule-checked, not judged.
+- No user accounts or UI for connecting QuickBooks beyond the signed-link flow.
+
+**Next, for real customers**
+
+1. Intuit production app review; EULA and privacy policy.
+2. OAuth for MCP clients; user accounts mapped to tenants.
+3. Held-out and adversarial eval cases, 10+ iterations on safety and fault cases, a calibrated model grader for estimate quality, and a read-only smoke suite against live books.
+4. Estimator cost: narrower comparable sets or a Haiku search step (it is two-thirds of an estimate's cost).
+5. Move the job queue and rate limits to shared infrastructure before running more than one instance.
+
+## Running it
 
 Requirements: Node 22+, pnpm 9, PostgreSQL 16.
 
 ```bash
 pnpm install
-cp .env.example .env            # then fill in values (see below)
-cp .env.test.example .env.test  # local test database credentials
-pnpm keygen                     # paste output into .env
+cp .env.example .env && cp .env.test.example .env.test   # fill in; pnpm keygen for secrets
 pnpm db:migrate
-pnpm test
+pnpm test                  # 193 tests, 27 files
+
+pnpm dev                   # co-core: OAuth, webhooks, worker, MCP (:3000)
+pnpm dev:estimator         # Estimator, A2A (:3300)
+pnpm dev:agent             # Office Manager + web chat (:3200)
+
+pnpm tenant:create "Demo Remodeling Co"     # prints a connect link
+pnpm seed:sandbox <tenant-id>               # sandbox only; idempotent
+pnpm api-key create <tenant-id> --write     # key for the chat / MCP
+pnpm eval                                   # full eval suite (~$3)
+bash infra/deploy.sh                        # deploy to the droplet
 ```
 
-## Repo layout
+Operations: `pnpm reconcile <tenant>`, `pnpm dlq list | replay <id>`,
+`pnpm webhooks:reingest <delivery-id>`, `pnpm eval:trace <case-id>`,
+`pnpm mcp:call <tool> '<json>'`, `pnpm chat`.
+
+## Repository
 
 ```
+apps/core           co-core process: API + worker + MCP
 apps/api            OAuth connect/callback, webhook ingestion
 apps/worker         job runner, handlers, nightly reconcile scheduler
 apps/mcp            MCP server: tools, API-key auth, guarded estimate write
-apps/core           co-core process: API + worker + MCP
-apps/office-manager co-office-manager process: /chat and /usage
-apps/estimator      co-estimator process: A2A server (Agent Card, JSON-RPC, Postgres task store)
-packages/agent      agent loop, router, pricing, spend cap, MCP toolbox
-infra/              PM2 file, nginx site, deploy script
-packages/shared     env validation, logger, error taxonomy, uuidv5
+apps/office-manager Office Manager: /chat, /usage, web chat page
+apps/estimator      Estimator: A2A server (Agent Card, JSON-RPC, Postgres task store)
+packages/agent      agent loop, router, run recorder, pricing, spend cap, A2A client
+packages/qbo        QuickBooks OAuth, token store, client, mirror, sync, CDC, webhooks
+packages/db         SQL migrations, runner, Kysely client, tenant scoping, job queue
 packages/crypto     AES-256-GCM key ring
-packages/db         SQL migrations, runner, Kysely client, withTenant/asSystem
-packages/qbo        OAuth, TokenStore, QboClient (retry/meter), mirror upserts, sync
-scripts/            keygen, tenant:create/link, seed:sandbox, sync:initial
-docs/decisions.md   why things are the way they are
-evals/              eval world, 35 cases, runner, report
+packages/shared     env validation, logging, errors
+evals/              eval world, 36 cases, runner, report, trace
+scripts/            seeder, tenants, API keys, sync, chat, operations
+docs/               architecture, decisions, failure modes, eval report, demo script
+infra/              PM2, nginx, deploy script
 ```
+
+Design decisions and their reasoning: [`docs/decisions.md`](docs/decisions.md).
+
+## Stack
+
+TypeScript on Node 22 · PostgreSQL 16 with Kysely and plain SQL migrations ·
+Express 5 · MCP TypeScript SDK v2 (spec 2026-07-28) · `@a2a-js/sdk` 1.x (A2A
+v1.0) · Anthropic API (Claude Haiku 5.5, Claude Sonnet 5.5) · QuickBooks Online
+API (minor version 75) · Vitest · PM2 and nginx on DigitalOcean.
