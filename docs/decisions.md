@@ -2,6 +2,20 @@
 
 Short records of choices that a reviewer might question. Newest first.
 
+## D8. Write guard in the agent runtime, not only in the tool
+**Day 4.** The MCP server already refuses to write without a preview and a
+token. But the server cannot know whether a *human* saw the preview: a model
+could request a preview and confirm it in the same turn. So the agent runtime
+adds a second gate: a confirmation is forwarded only if (a) its token was
+issued in an earlier turn of this conversation, i.e. the user has seen it, and
+(b) the router classified the user's current message as an explicit approval.
+Otherwise the call never reaches MCP, the model gets a CONFIRMATION_REQUIRED
+error, and a `guard` step is recorded. Both gates fail closed.
+
+Model choice: the docs as of October 2026 list Claude Haiku 5.5 at $0.10/$0.50
+per MTok, about 10x cheaper than Haiku 4.5, so the plan's "small model" became
+Haiku 5.5. Prices live in `model_prices`, not code.
+
 ## D7. MCP auth: per-tenant API keys, not MCP OAuth
 **Day 3.** The MCP spec's authorization model is OAuth 2.1 with protected
 resource metadata. That is the right answer for third-party clients (Claude

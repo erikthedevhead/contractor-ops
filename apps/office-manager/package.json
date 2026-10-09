@@ -1,0 +1,16 @@
+{
+  "name": "@co/office-manager",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/app.ts" },
+  "dependencies": {
+    "@co/agent": "workspace:*",
+    "@co/db": "workspace:*",
+    "@co/mcp": "workspace:*",
+    "@co/shared": "workspace:*",
+    "express": "^5.2.1",
+    "kysely": "^0.29.6",
+    "zod": "^4.6.5"
+  }
+}

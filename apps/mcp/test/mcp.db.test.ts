@@ -181,6 +181,20 @@ describe('read tools match the seed plan', () => {
     expect(r.body.error.code).toBe('INVALID_ARGUMENT');
   });
 
+  it('an unknown customer_id is NOT_FOUND, never a plausible-looking zero', async () => {
+    const c = await connect(keys.aRead);
+    for (const [tool, args] of [
+      ['get_ar_aging', { customer_id: '<customer_id from above>' }],
+      ['list_open_estimates', { customer_id: '999999' }],
+      ['get_customer_job_history', { customer_id: '999999' }],
+    ] as const) {
+      const r = await call(c, tool, args);
+      expect(r.isError).toBe(true);
+      expect(r.body.error.code).toBe('NOT_FOUND');
+      expect(r.body.error.hint).toMatch(/find_customer/);
+    }
+  });
+
   it('schema validation errors come back as tool errors, not exceptions', async () => {
     const r = await call(await connect(keys.aRead), 'get_ar_aging', { as_of: 'last tuesday' });
     expect(r.isError).toBe(true);

@@ -19,7 +19,7 @@ echo "==> install, migrate, reload"
 ssh "$HOST" "cd $DIR && test -f .env || { echo 'missing .env on server'; exit 1; }
   pnpm install --frozen-lockfile
   pnpm db:migrate
-  (pm2 describe co-core >/dev/null 2>&1 && pm2 reload infra/ecosystem.config.cjs --update-env) || pm2 start infra/ecosystem.config.cjs
+  pm2 startOrReload infra/ecosystem.config.cjs --update-env
   pm2 save"
 
 echo "==> health"

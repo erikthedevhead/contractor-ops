@@ -18,6 +18,19 @@ export async function tenantToday(tx: Tx, tenantId: string): Promise<string> {
   return r.rows[0]?.d ?? new Date().toISOString().slice(0, 10);
 }
 
+/**
+ * A customer_id that doesn't exist must be an error, not an empty result:
+ * "owes $0.00" for a mistyped id is a confident wrong answer.
+ */
+export async function assertCustomer(tx: Tx, tenantId: string, customerId: string | undefined): Promise<void> {
+  if (!customerId) return;
+  const c = await tx.selectFrom('qbo_customers').select('qbo_id')
+    .where('tenant_id', '=', tenantId).where('qbo_id', '=', customerId).where('is_deleted', '=', false).executeTakeFirst();
+  if (!c) {
+    throw new ToolError('NOT_FOUND', `No customer with id ${customerId}.`, { hint: 'Call find_customer with the customer\'s name to get a valid customer_id. Never guess ids.' });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // find_customer
 // ---------------------------------------------------------------------------
@@ -79,6 +92,7 @@ const bucketFor = (daysPastDue: number): Bucket =>
   daysPastDue <= 0 ? 'current' : daysPastDue <= 30 ? '1_30' : daysPastDue <= 60 ? '31_60' : daysPastDue <= 90 ? '61_90' : 'over_90';
 
 export async function getArAging(tx: Tx, tenantId: string, args: { as_of?: string; overdue_more_than_days?: number; customer_id?: string }) {
+  await assertCustomer(tx, tenantId, args.customer_id);
   const asOf = args.as_of ?? (await tenantToday(tx, tenantId));
   const rows = await sql<{
     invoice_id: string; doc_number: string | null; customer_id: string; customer_name: string;
@@ -128,6 +142,7 @@ export async function getArAging(tx: Tx, tenantId: string, args: { as_of?: strin
 // list_open_estimates
 // ---------------------------------------------------------------------------
 export async function listOpenEstimates(tx: Tx, tenantId: string, args: { customer_id?: string; include_expired?: boolean; as_of?: string }) {
+  await assertCustomer(tx, tenantId, args.customer_id);
   const asOf = args.as_of ?? (await tenantToday(tx, tenantId));
   const rows = await sql<{
     estimate_id: string; doc_number: string | null; customer_id: string; customer_name: string;
@@ -185,6 +200,7 @@ export async function getCustomerJobHistory(tx: Tx, tenantId: string, args: { cu
   if (!args.customer_id && !args.query?.trim()) {
     throw new ToolError('INVALID_ARGUMENT', 'Provide customer_id, query, or both.', { hint: 'Use query (e.g. "bathroom remodel walk-in shower") to find similar jobs across all customers.' });
   }
+  await assertCustomer(tx, tenantId, args.customer_id);
   const q = args.query?.trim() || null;
   const limit = Math.min(args.limit ?? 10, 25);
   const like = q ? `%${likeEscape(q)}%` : null;

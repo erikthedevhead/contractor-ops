@@ -11,7 +11,7 @@ architecture diagram and eval results land at the end of the week.
 | 1 | Scaffold, schema + RLS, QuickBooks OAuth + encrypted token storage, seeder, initial sync | done |
 | 2 | Webhooks (CloudEvents), job queue, idempotency, retries, dead-letter, CDC reconciliation | done |
 | 3 | MCP server (SDK v2), tenant-scoped API keys, two-step write | done |
-| 4 | Office Manager agent loop, cost metering, spend caps | |
+| 4 | Office Manager agent loop, cost metering, spend caps | done |
 | 5 | Estimator agent over A2A | |
 | 6 | Evals + fault injection | |
 | 7 | Deploy, docs, demo | |
@@ -79,6 +79,31 @@ architecture diagram and eval results land at the end of the week.
   hint}`; unexpected errors are logged server-side and surface only as
   `INTERNAL`.
 
+## What Day 4 proves
+
+- **A custom agent loop, fully inspectable.** No framework. Each turn is
+  `route -> [model -> tools]* -> answer`; every model call, tool call and guard
+  decision is a row in `agent_steps`, so any answer can be traced to the exact
+  tool results it was built from.
+- **MCP is the agent's only path to data.** The agent is an MCP client using the
+  caller's API key, so it inherits the caller's tenant and scopes: a read-only
+  key produces an agent that cannot write.
+- **Model routing.** A Haiku 5.5 classification call (structured JSON output)
+  picks the model per turn: Haiku 5.5 for lookups, Sonnet 5.5 for analysis and
+  estimating. Routing fails closed: if the router errors, the turn runs as a
+  plain lookup that can never unlock a write.
+- **Per-tenant cost tracking and a hard cap.** Every call is priced from a
+  `model_prices` table (input, output, cache read/write) and logged to
+  `llm_calls`. Each call reserves its worst-case cost before running and settles
+  afterwards, so concurrent requests can't overshoot the monthly cap (tested
+  with 20 concurrent reservations against a cap that fits 5). `GET /agent/usage`
+  shows the month's spend by model, runs, and QuickBooks calls.
+- **The agent cannot write without the user's say-so.** Beyond the MCP server's
+  two-step write, the runtime blocks any confirmation unless the token was shown
+  to the user in an earlier turn and the current message is an explicit
+  approval. A model that "helpfully" confirms its own draft is stopped and the
+  attempt is recorded as a guard step. Tested across four turns.
+
 ## Operating it
 
 ```bash
@@ -88,6 +113,8 @@ pnpm dlq list                 # dead-lettered jobs
 pnpm dlq replay <id>          # requeue one
 pnpm webhooks:reingest <id>   # replay a stored delivery through the current parser
 bash infra/deploy.sh          # deploy to the droplet
+pnpm dev:agent                # Office Manager on :3200 (needs pnpm dev running)
+MCP_API_KEY=... pnpm chat     # talk to it
 pnpm api-key create <tenant> [--write]   # MCP key (shown once)
 MCP_API_KEY=... pnpm mcp:call get_ar_aging '{"overdue_more_than_days":60}'
 ```
@@ -112,6 +139,8 @@ apps/api            OAuth connect/callback, webhook ingestion
 apps/worker         job runner, handlers, nightly reconcile scheduler
 apps/mcp            MCP server: tools, API-key auth, guarded estimate write
 apps/core           co-core process: API + worker + MCP
+apps/office-manager co-office-manager process: /chat and /usage
+packages/agent      agent loop, router, pricing, spend cap, MCP toolbox
 infra/              PM2 file, nginx site, deploy script
 packages/shared     env validation, logger, error taxonomy, uuidv5
 packages/crypto     AES-256-GCM key ring

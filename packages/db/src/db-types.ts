@@ -42,10 +42,13 @@ export type WebhookEventStatus = "failed" | "ignored" | "processed" | "processin
 export interface AgentRuns {
   a2a_task_id: string | null;
   agent: AgentName;
+  conversation_id: string | null;
   eval_case_id: string | null;
   final_output: string | null;
   finished_at: Timestamp | null;
   id: Generated<string>;
+  intent: string | null;
+  model: string | null;
   parent_run_id: string | null;
   started_at: Generated<Timestamp>;
   status: Generated<string>;
@@ -77,6 +80,16 @@ export interface ApiKeys {
   revoked_at: Timestamp | null;
   scopes: Generated<string[]>;
   tenant_id: string;
+}
+
+export interface Conversations {
+  agent: AgentName;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  issued_tokens: Generated<Json>;
+  messages: Generated<Json>;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface DeadLetters {
@@ -390,6 +403,7 @@ export interface DB {
   agent_runs: AgentRuns;
   agent_steps: AgentSteps;
   api_keys: ApiKeys;
+  conversations: Conversations;
   dead_letters: DeadLetters;
   eval_results: EvalResults;
   eval_runs: EvalRuns;
