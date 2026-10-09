@@ -10,7 +10,7 @@ architecture diagram and eval results land at the end of the week.
 |---|---|---|
 | 1 | Scaffold, schema + RLS, QuickBooks OAuth + encrypted token storage, seeder, initial sync | done |
 | 2 | Webhooks (CloudEvents), job queue, idempotency, retries, dead-letter, CDC reconciliation | done |
-| 3 | MCP server (SDK v2), tenant-scoped API keys, two-step write | |
+| 3 | MCP server (SDK v2), tenant-scoped API keys, two-step write | done |
 | 4 | Office Manager agent loop, cost metering, spend caps | |
 | 5 | Estimator agent over A2A | |
 | 6 | Evals + fault injection | |
@@ -57,6 +57,28 @@ architecture diagram and eval results land at the end of the week.
   deletes; falls back to a paged query when an entity hits CDC's 1,000-object
   cap; schedules a full re-sync when the gap exceeds CDC's 30-day window.
 
+## What Day 3 proves
+
+- **MCP on the current spec.** TypeScript SDK v2, protocol 2026-07-28,
+  stateless: one server instance per request, built for exactly one
+  authenticated tenant. Six tools, five read-only, all answered from the
+  Postgres mirror (zero QuickBooks calls, zero quota).
+- **No tenant parameter exists.** The tenant comes from the API key; no tool
+  schema mentions a tenant, so no argument (or prompt injection) can reach
+  another tenant's data. RLS enforces it again underneath. Tested.
+- **Keys handled like credentials.** 256-bit keys, stored as SHA-256 with a
+  display prefix; the app role cannot read the keys table at all and resolves
+  keys only through a `SECURITY DEFINER` function. Scopes: `read` and
+  `write:estimate`.
+- **A write that can't happen by accident or twice.** `create_estimate_draft`
+  previews first and writes only with a single-use, tenant-bound, 15-minute
+  confirmation token. The exact QuickBooks body is fixed and hash-checked at
+  preview time; every retry reuses one `requestid`; a replayed token returns the
+  original estimate. Tested through outages, lost responses and tampering.
+- **Errors an agent can act on.** Every failure is `{code, message, retryable,
+  hint}`; unexpected errors are logged server-side and surface only as
+  `INTERNAL`.
+
 ## Operating it
 
 ```bash
@@ -66,6 +88,8 @@ pnpm dlq list                 # dead-lettered jobs
 pnpm dlq replay <id>          # requeue one
 pnpm webhooks:reingest <id>   # replay a stored delivery through the current parser
 bash infra/deploy.sh          # deploy to the droplet
+pnpm api-key create <tenant> [--write]   # MCP key (shown once)
+MCP_API_KEY=... pnpm mcp:call get_ar_aging '{"overdue_more_than_days":60}'
 ```
 
 ## Local setup
@@ -86,7 +110,8 @@ pnpm test
 ```
 apps/api            OAuth connect/callback, webhook ingestion
 apps/worker         job runner, handlers, nightly reconcile scheduler
-apps/core           co-core process: API + worker
+apps/mcp            MCP server: tools, API-key auth, guarded estimate write
+apps/core           co-core process: API + worker + MCP
 infra/              PM2 file, nginx site, deploy script
 packages/shared     env validation, logger, error taxonomy, uuidv5
 packages/crypto     AES-256-GCM key ring

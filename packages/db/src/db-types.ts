@@ -349,6 +349,7 @@ export interface Tenants {
   id: Generated<string>;
   monthly_spend_cap_usd: Generated<Numeric>;
   name: string;
+  timezone: Generated<string>;
 }
 
 export interface TenantSpend {

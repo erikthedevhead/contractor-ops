@@ -2,6 +2,17 @@
 
 Short records of choices that a reviewer might question. Newest first.
 
+## D7. MCP auth: per-tenant API keys, not MCP OAuth
+**Day 3.** The MCP spec's authorization model is OAuth 2.1 with protected
+resource metadata. That is the right answer for third-party clients (Claude
+Desktop, IDEs) connecting on a user's behalf. Here the only clients are this
+system's own agents, server-to-server, so a scoped API key per tenant is the
+proportionate choice. The tenant is derived from the key, never from tool
+arguments. Moving to OAuth means replacing one Express middleware
+(`requireBearerAuth` from `@modelcontextprotocol/express` with a token
+verifier); the per-request server factory already takes the principal from
+`authInfo`. Listed under "Production vs. prototype".
+
 ## D6. Accept both Intuit webhook formats
 **Day 2, found in the live sandbox.** Intuit's docs say the legacy webhook
 format was retired in July 2026, but a new app's "CloudEvents payload" setting

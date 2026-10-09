@@ -22,20 +22,24 @@
     "start": "node --env-file=.env --import tsx apps/core/src/main.ts",
     "reconcile": "tsx --env-file=.env scripts/reconcile.ts",
     "dlq": "tsx --env-file=.env scripts/dlq.ts",
-    "webhooks:reingest": "tsx --env-file=.env scripts/reingest.ts"
+    "webhooks:reingest": "tsx --env-file=.env scripts/reingest.ts",
+    "api-key": "tsx --env-file=.env scripts/api-key.ts",
+    "mcp:call": "tsx --env-file=.env scripts/mcp-call.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/node": "^22.18.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "@modelcontextprotocol/client": "^2.3.1"
   },
   "dependencies": {
     "@co/crypto": "workspace:*",
     "@co/db": "workspace:*",
     "@co/qbo": "workspace:*",
     "@co/shared": "workspace:*",
-    "kysely": "^0.29.6"
+    "kysely": "^0.29.6",
+    "@co/mcp": "workspace:*"
   }
 }

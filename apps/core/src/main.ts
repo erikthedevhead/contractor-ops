@@ -8,6 +8,7 @@ import { createApp } from '@co/api';
 import { dbMeter, QboClient, TokenStore } from '@co/qbo';
 import { env, logger } from '@co/shared';
 import { Q, Worker } from '@co/worker';
+import { mcpRouter } from '@co/mcp';
 
 const e = env();
 const db = createDb(e.DATABASE_URL, { max: 10 });
@@ -17,6 +18,7 @@ const clientFor = (tenantId: string) => new QboClient(tenantId, { tokens, meter:
 
 const app = createApp({
   db,
+  mcp: mcpRouter({ db, clientFor }),
   tokens,
   qbo,
   connectLinkSecret: e.CONNECT_LINK_SECRET,

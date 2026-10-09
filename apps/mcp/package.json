@@ -1,0 +1,20 @@
+{
+  "name": "@co/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@co/db": "workspace:*",
+    "@co/qbo": "workspace:*",
+    "@co/shared": "workspace:*",
+    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/server": "^2.3.1",
+    "express": "^5.2.1",
+    "kysely": "^0.29.6",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1"
+  }
+}

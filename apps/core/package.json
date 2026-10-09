@@ -8,6 +8,7 @@
     "@co/db": "workspace:*",
     "@co/qbo": "workspace:*",
     "@co/shared": "workspace:*",
-    "@co/worker": "workspace:*"
+    "@co/worker": "workspace:*",
+    "@co/mcp": "workspace:*"
   }
 }

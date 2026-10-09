@@ -13,6 +13,8 @@ export interface AppDeps {
   connectLinkSecret: string;
   /** Intuit webhook verifier token. Without it the webhook endpoint answers 503. */
   webhookVerifier?: string;
+  /** MCP endpoint wiring (Day 3). When present, POST/GET /mcp are served. */
+  mcp?: { auth: express.RequestHandler; handle: (req: Request, res: Response) => Promise<void> };
   /** Called after a successful connect (Day 1: kick off initial sync; Day 2: enqueue a job). */
   onConnected?: (tenantId: string, realmId: string) => void;
   fetchFn?: FetchLike;
@@ -29,6 +31,11 @@ export function createApp(deps: AppDeps) {
   app.get('/health', (_req, res) => {
     res.json({ ok: true });
   });
+
+  if (deps.mcp) {
+    const { auth, handle } = deps.mcp;
+    app.all('/mcp', auth, (req, res) => handle(req, res));
+  }
 
   /**
    * Intuit webhooks. Raw body parser: the signature is over the exact bytes,
