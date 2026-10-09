@@ -208,6 +208,8 @@ describe('spend cap', () => {
     // No scripted answer -> the fake throws on the answer call.
     const r = await turn('This will fail');
     expect(r.status).toBe('failed');
+    const err = await withTenant(w.db, w.tenantId, (tx) => tx.selectFrom('agent_steps').select(['kind', 'error']).where('run_id', '=', r.runId).where('kind', '=', 'error').executeTakeFirstOrThrow());
+    expect(JSON.stringify(err.error)).toMatch(/no scripted response/);
     const spend = await withTenant(w.db, w.tenantId, (tx) => tx.selectFrom('tenant_spend').select('reserved_usd').executeTakeFirstOrThrow());
     expect(Number(spend.reserved_usd)).toBe(0);
   });

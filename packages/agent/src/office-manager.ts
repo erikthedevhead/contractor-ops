@@ -35,7 +35,7 @@ export interface TurnInput {
 }
 
 export interface StepSummary {
-  kind: 'llm' | 'tool' | 'guard';
+  kind: 'llm' | 'tool' | 'guard' | 'error';
   name: string;
   ok: boolean;
   ms: number;
@@ -271,6 +271,8 @@ export async function runTurn(deps: AgentDeps, input: TurnInput): Promise<TurnRe
       return await finish('rejected_spend_cap', `This account has reached its monthly AI budget ($${err.capUsd.toFixed(2)}). Questions will work again next month, or after the budget is raised.`, rt, null, issued);
     }
     log.error({ tenantId, runId, err: err instanceof Error ? { message: err.message, stack: err.stack } : String(err) }, 'agent turn failed');
+    await recordStep('error', 'turn_failed', { error: { message: err instanceof Error ? err.message : String(err) }, ms: 0 }).catch(() => {});
+    steps.push({ kind: 'error', name: 'turn_failed', ok: false, ms: 0 });
     return await finish('failed', 'Something went wrong while answering. The problem has been logged; please try again.', rt, null, issued);
   } finally {
     await toolbox?.close().catch(() => {});

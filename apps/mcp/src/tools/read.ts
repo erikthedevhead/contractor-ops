@@ -210,7 +210,7 @@ export async function getCustomerJobHistory(tx: Tx, tenantId: string, args: { cu
   const jobs = await sql<{
     source: 'estimate' | 'invoice'; job_id: string; customer_id: string; customer_name: string; date: string; status: string;
     title: string | null; estimate_id: string | null; estimate_total: string | null; invoice_id: string | null; invoiced_total: string | null;
-    invoice_balance: string | null; score: string | null;
+    invoice_balance: string | null; score: string | null; total_matches: number;
   }>`
     WITH jobs AS (
       SELECT 'estimate'::text AS source, e.qbo_id AS job_id, e.customer_qbo_id AS customer_id, e.txn_date AS date,
@@ -230,7 +230,8 @@ export async function getCustomerJobHistory(tx: Tx, tenantId: string, args: { cu
     )
     SELECT j.source, j.job_id, j.customer_id, coalesce(c.display_name, '(unknown)') AS customer_name, j.date::text AS date, j.status,
            j.title, j.estimate_id, j.estimate_total, j.invoice_id, j.invoiced_total, j.invoice_balance,
-           ${q ? sql`round(greatest(word_similarity(${q}, coalesce(j.title, '')), similarity(coalesce(j.title, ''), ${q}))::numeric, 3)::text` : sql`NULL`} AS score
+           ${q ? sql`round(greatest(word_similarity(${q}, coalesce(j.title, '')), similarity(coalesce(j.title, ''), ${q}))::numeric, 3)::text` : sql`NULL`} AS score,
+           count(*) OVER ()::int AS total_matches
       FROM jobs j
       LEFT JOIN qbo_customers c ON c.tenant_id = ${tenantId} AND c.qbo_id = j.customer_id
      WHERE TRUE
@@ -251,10 +252,16 @@ export async function getCustomerJobHistory(tx: Tx, tenantId: string, args: { cu
          ORDER BY l.line_num NULLS LAST, l.line_id`.execute(tx)
     : { rows: [] };
 
+  // Never let a partial list look complete: say how many matched in total.
+  const totalMatches = jobs.rows[0]?.total_matches ?? 0;
+  const truncated = totalMatches > jobs.rows.length;
   return {
     filter: { customer_id: args.customer_id ?? null, query: q },
     count: jobs.rows.length,
-    jobs: jobs.rows.map((j) => ({
+    total_matches: totalMatches,
+    truncated,
+    note: truncated ? `Showing ${jobs.rows.length} of ${totalMatches} matching jobs. Raise limit (max 25) or narrow the query before drawing conclusions about all of them.` : undefined,
+    jobs: jobs.rows.map(({ total_matches: _t, ...j }) => ({
       ...j,
       score: j.score === null ? undefined : Number(j.score),
       lines: includeLines

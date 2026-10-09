@@ -176,6 +176,17 @@ describe('read tools match the seed plan', () => {
     expect(r.body.jobs[0].lines[0]).toHaveProperty('item_id');
   });
 
+  it('get_customer_job_history: says when the list is partial (no silent truncation)', async () => {
+    const c = await connect(keys.aRead);
+    const bathrooms = plan.jobs.filter((j) => j.type === 'bathroom').length;
+    const r = await call(c, 'get_customer_job_history', { query: 'bath', limit: 5, include_lines: false });
+    expect(r.body).toMatchObject({ count: 5, truncated: true });
+    expect(r.body.total_matches).toBeGreaterThanOrEqual(bathrooms);
+    expect(r.body.note).toMatch(/Showing 5 of/);
+    const all = await call(c, 'get_customer_job_history', { query: 'bath', limit: 25, include_lines: false });
+    expect(all.body.truncated).toBe(false);
+  });
+
   it('get_customer_job_history: requires a filter', async () => {
     const r = await call(await connect(keys.aRead), 'get_customer_job_history', {});
     expect(r.body.error.code).toBe('INVALID_ARGUMENT');

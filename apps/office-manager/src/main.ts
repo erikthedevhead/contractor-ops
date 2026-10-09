@@ -19,6 +19,17 @@ const app = createOfficeManagerApp({
 });
 const server = app.listen(port, '127.0.0.1', () => logger.info({ port, mcpUrl }, 'office manager listening'));
 
+// Startup probe: an unauthenticated request must reach OUR MCP server and be
+// refused with our realm. Catches a wrong or unreachable MCP_URL at boot
+// instead of on the first user question.
+fetch(mcpUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+  .then((r) => {
+    const ours = r.status === 401 && (r.headers.get('www-authenticate') ?? '').includes('contractor-ops');
+    if (ours) logger.info({ mcpUrl }, 'mcp server reachable');
+    else logger.warn({ mcpUrl, status: r.status }, 'MCP_URL did not answer like this app\'s MCP server; check MCP_URL (a shell export overrides .env)');
+  })
+  .catch((err) => logger.error({ mcpUrl, err: String(err) }, 'MCP server unreachable at startup; agent turns will fail until it is up'));
+
 const shutdown = () => {
   server.close(() => void db.destroy().then(() => process.exit(0)));
   setTimeout(() => process.exit(1), 15_000).unref();
