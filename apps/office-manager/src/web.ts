@@ -1,4 +1,4 @@
-import { renderMarkdown } from './markdown';
+import { RENDER_MARKDOWN_SOURCE } from './markdown';
 
 /**
  * The web chat. One self-contained page, served with a per-request CSP nonce.
@@ -133,7 +133,7 @@ export function chatPage(nonce: string): string {
 </div>
 
 <script nonce="${nonce}">
-const renderMarkdown = ${renderMarkdown.toString()};
+${RENDER_MARKDOWN_SOURCE}
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 let key = sessionStorage.getItem('co_key') || '';
@@ -201,8 +201,15 @@ async function send() {
     if (!res.ok && res.status !== 402) { pending.classList.add('error'); pending.innerHTML = '<p>The Office Manager returned an error (' + res.status + (body.details ? ': ' + esc(body.details.join('; ')) : '') + '). Send the message again.</p>'; return; }
     conversationId = body.conversation_id || conversationId;
     if (body.status !== 'completed') pending.classList.add('error');
-    pending.innerHTML = renderMarkdown(body.reply || '') + trace(body);
-  } catch {
+    try {
+      pending.innerHTML = renderMarkdown(body.reply || '') + trace(body);
+    } catch (err) {
+      // The answer arrived; only the formatting failed. Show it as plain text rather than mislabel it.
+      console.error('render failed', err);
+      pending.innerHTML = '<p>' + esc(body.reply || '').replace(/\\n/g, '<br>') + '</p>';
+    }
+  } catch (err) {
+    console.error(err);
     pending.classList.add('error');
     pending.innerHTML = '<p>Could not reach the Office Manager. Check your connection, then send again.</p>';
   } finally {

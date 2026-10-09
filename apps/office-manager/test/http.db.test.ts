@@ -37,7 +37,8 @@ describe('office manager HTTP API', () => {
     expect(csp).toContain("connect-src 'self'");
     expect(html).toContain(`<script nonce="${nonce}">`);
     expect(html).not.toMatch(/ on(click|load|error)=/); // no inline handlers
-    expect(html).toContain('const renderMarkdown = ');
+    expect(html).toContain('function renderMarkdown(src)');
+    expect(html).not.toContain('__name'); // no compiler helpers in browser code
     const again = await fetch(`${base}/`);
     expect(again.headers.get('content-security-policy')).not.toBe(csp); // fresh nonce each time
   });

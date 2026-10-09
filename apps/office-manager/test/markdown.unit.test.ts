@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { renderMarkdown } from '../src/markdown';
+import vm from 'node:vm';
+import { renderMarkdown, RENDER_MARKDOWN_SOURCE } from '../src/markdown';
+import { chatPage } from '../src/web';
 
 describe('renderMarkdown (agent replies in the web chat)', () => {
   it('renders the formats the agent actually uses', () => {
@@ -17,8 +19,21 @@ describe('renderMarkdown (agent replies in the web chat)', () => {
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 
-  it('is self-contained so the page can embed it verbatim', () => {
-    const fn = new Function(`return (${renderMarkdown.toString()})`)() as typeof renderMarkdown;
-    expect(fn('**hi** <b>')).toBe('<p><strong>hi</strong> &lt;b&gt;</p>');
+  it('runs in a bare context with no Node or bundler globals (as in the browser)', () => {
+    // Regression: the first version referenced a compiler helper (__name) that only existed in Node.
+    const ctx = vm.createContext({});
+    vm.runInContext(RENDER_MARKDOWN_SOURCE, ctx);
+    expect(vm.runInContext('renderMarkdown("**hi** <b>")', ctx)).toBe('<p><strong>hi</strong> &lt;b&gt;</p>');
+  });
+
+  it('the whole page script runs in a bare context without reference errors', () => {
+    const html = chatPage('N');
+    const script = html.split('<script nonce="N">')[1]!.split('</script>')[0]!;
+    // Minimal DOM/browser stubs: enough for top-level code; any undefined global throws.
+    const el = () => ({ hidden: false, value: '', onclick: null, oninput: null, onkeydown: null, focus() {}, querySelectorAll: () => [], setCustomValidity() {}, reportValidity() {} });
+    const ctx = vm.createContext({ document: { getElementById: el, createElement: el }, sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} }, console });
+    vm.runInContext(script, ctx);
+    expect(vm.runInContext('typeof renderMarkdown', ctx)).toBe('function');
+    expect(script).not.toContain('__name');
   });
 });
